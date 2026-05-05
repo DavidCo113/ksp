@@ -118,6 +118,14 @@ void chat_clear(int channel);
 void chat_showpopup(const char* msg, float duration, int color);
 const char* reason_disconnect(int code);
 
+/* Session log: append-only buffer of channel-0 chat for the chatlog wall.
+   Holds the full current connection session, unlike chat[0][] which is
+   capped at 127 slots. Reset on chat_clear(0). */
+#define SESSION_LOG_MAX 4096
+extern char         session_log_raw[SESSION_LOG_MAX][256];
+extern unsigned int session_log_color[SESSION_LOG_MAX];
+extern int          session_log_count;
+
 #define SCREEN_NONE 0
 #define SCREEN_TEAM_SELECT 1
 #define SCREEN_GUN_SELECT 2

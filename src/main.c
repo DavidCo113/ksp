@@ -64,6 +64,10 @@ char chat[3][128][256] = {0}; // chat[0] is current input
 unsigned int chat_color[3][128];
 float chat_timer[3][128];
 unsigned int chat_history_pos;
+char         session_log_raw[SESSION_LOG_MAX][256];
+unsigned int session_log_color[SESSION_LOG_MAX];
+int          session_log_count = 0;
+
 void chat_add(int channel, unsigned int color, const char* msg) {
 	memmove(chat[channel][2], chat[channel][1], sizeof(chat[channel][0]) * 125);
 	memmove(&chat_color[channel][2], &chat_color[channel][1], sizeof(chat_color[channel][0]) * 125);
@@ -71,21 +75,29 @@ void chat_add(int channel, unsigned int color, const char* msg) {
 	strcpy(chat[channel][1], msg);
 	chat_color[channel][1] = color;
 	chat_timer[channel][1] = window_time();
-	if(channel == 0)
+	if(channel == 0) {
 		log_info("%s", msg);
+		/* Append to session log (separate from the 128-slot live ring,
+		   which would otherwise discard old session messages on overflow
+		   and break the chatlog wall's stable scroll position). */
+		if(session_log_count >= SESSION_LOG_MAX) {
+			memmove(session_log_raw,   session_log_raw + 1,   (SESSION_LOG_MAX - 1) * sizeof(session_log_raw[0]));
+			memmove(session_log_color, session_log_color + 1, (SESSION_LOG_MAX - 1) * sizeof(session_log_color[0]));
+			session_log_count = SESSION_LOG_MAX - 1;
+		}
+		strncpy(session_log_raw[session_log_count], msg, sizeof(session_log_raw[0]) - 1);
+		session_log_raw[session_log_count][sizeof(session_log_raw[0]) - 1] = 0;
+		session_log_color[session_log_count] = color;
+		session_log_count++;
+	}
 }
 
 void chat_clear(int channel) {
-	/* Clear from index 1 (the newest-message slot), not 2. The previous
-	   range left chat[ch][1] populated with whatever the last server sent
-	   us, so joining server B kept server A's final chat line in the ring
-	   - it migrated backward through the buffer as B's own messages
-	   arrived and stayed visible in the chatlog tab until 127 new lines
-	   pushed it off the end. The parallel color/timer arrays are wiped
-	   as well so no stale fade-in timing fires on freshly cleared slots. */
 	memset(chat[channel][1], 0, sizeof(chat[channel][0]) * 127);
 	memset(&chat_color[channel][1], 0, sizeof(chat_color[channel][0]) * 127);
 	memset(&chat_timer[channel][1], 0, sizeof(chat_timer[channel][0]) * 127);
+	if(channel == 0)
+		session_log_count = 0;
 }
 
 char chat_popup[256] = {};

@@ -193,6 +193,12 @@ int window_super_down(void) {
 		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
 }
 
+int window_shift_down(void) {
+	if(!hud_window || !hud_window->impl) return 0;
+	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
+		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+}
+
 static GLFWcursor* window_hand_cursor = NULL;
 void window_cursor_hand(int on) {
 	if(!hud_window || !hud_window->impl) return;
@@ -425,6 +431,12 @@ int window_super_down(void) {
 	const Uint8* state = SDL_GetKeyboardState(NULL);
 	if(!state) return 0;
 	return state[SDL_SCANCODE_LGUI] || state[SDL_SCANCODE_RGUI];
+}
+
+int window_shift_down(void) {
+	const Uint8* state = SDL_GetKeyboardState(NULL);
+	if(!state) return 0;
+	return state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
 }
 
 static SDL_Cursor* window_hand_cursor = NULL;

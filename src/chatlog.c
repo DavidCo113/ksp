@@ -788,34 +788,19 @@ static void build_visible_lines(void) {
 		emit_chat_line(h->raw, 0xAAAAAA);
 	}
 
-	/* Locate live chat range. */
-	int highest = -1;
-	for(int k = CHATLOG_RING_SIZE - 1; k >= 1; k--) {
-		if(chat[0][k][0] != 0) { highest = k; break; }
-	}
-
-	if(highest >= 1) {
-		/* Day separator between the most recent history day and today (live). */
+	/* Live session: iterate session_log (not the 128-slot live ring,
+	   which would silently drop old messages on overflow). */
+	if(session_log_count > 0) {
 		if(last_day >= 0 && last_day != today_day) {
 			emit_hidden_placeholder(&hidden_run);
 			emit_day_separator(time(NULL), today_day);
-		} else if(last_day < 0 && hc == 0) {
-			/* No history at all - skip leading separator to keep the bare
-			   live view clean. */
 		}
 
-		/* Anything in `lines` so far comes from chathistory replays of
-		   earlier sessions; mark the boundary so the live ring is
-		   visually scoped to the current connection. We skip the marker
-		   when nothing precedes the live chat to avoid a lone "Current
-		   session" header floating at the top of an otherwise-fresh
-		   chatlog. */
 		if(line_count > 0)
 			emit_session_separator(time(NULL), 1);
 
-		/* chat[0][highest] is oldest, chat[0][1] is newest. */
-		for(int k = highest; k >= 1 && line_count < CHATLOG_MAX_LINES; k--) {
-			const char* raw = chat[0][k];
+		for(int k = 0; k < session_log_count && line_count < CHATLOG_MAX_LINES; k++) {
+			const char* raw = session_log_raw[k];
 			char name[64];
 			int name_start = 0;
 			int name_len = extract_player_name(raw, name, sizeof(name), &name_start);
@@ -825,7 +810,7 @@ static void build_visible_lines(void) {
 				if(name_len == 0 && filter_hide_server) { hidden_run++; continue; }
 			}
 			emit_hidden_placeholder(&hidden_run);
-			emit_chat_line(raw, chat_color[0][k]);
+			emit_chat_line(raw, session_log_color[k]);
 		}
 	}
 
@@ -1140,30 +1125,42 @@ static void hud_chatlog_render(mu_Context* ctx, float scalex, float scaley) {
 		}
 		prev_history_count = cur_hc;
 
-		int top_idx = -1; /* unused now; kept for ABI minimality */
+		int top_idx = -1;
 		const char* top_raw = (line_count > 0) ? lines[line_count - 1].raw : NULL;
 		int top_len = (line_count > 0) ? lines[line_count - 1].plain_len : 0;
-		/* Newest live entry lives at chat[0][1] - that slot is overwritten
-		   in place, so we compare its content instead of its address. */
-		int live_changed = (strcmp(prev_live_newest, chat[0][1]) != 0);
+		/* Detect appends to session_log so auto-scroll-to-bottom can fire. */
+		static int prev_session_count = 0;
+		int live_changed = (session_log_count != prev_session_count);
 		int messages_changed = live_changed
 			|| ((intptr_t)top_raw != prev_top_chat_idx)
 			|| (top_len != prev_top_chat_len);
-		strncpy(prev_live_newest, chat[0][1], sizeof(prev_live_newest) - 1);
-		prev_live_newest[sizeof(prev_live_newest) - 1] = 0;
+		prev_session_count = session_log_count;
 		prev_top_chat_idx = (intptr_t)top_raw;
 		prev_top_chat_len = top_len;
 		(void)top_idx;
+		(void)prev_live_newest;
 
 		int max_scroll_before = panel->content_size.y - panel->body.h;
 		if(max_scroll_before < 0) max_scroll_before = 0;
-		int was_at_bottom = (panel->scroll.y >= max_scroll_before - 4);
+		/* +/- padding*2 slack: microui's scrollbar clamps cs+=padding*2,
+		   so being within that of the visible max still counts as bottom. */
+		int was_at_bottom = (panel->scroll.y >= max_scroll_before
+							 - ctx->style->padding * 2 - 4);
 
-		if(needs_scroll_to_bottom) {
+		/* "Stick to bottom" needs the post-build content_size to clamp
+		   against, but content_size is only updated in mu_end_panel.
+		   Setting scroll.y = INT_MAX here gets clamped this frame to the
+		   stale max (so this frame draws short of true bottom), but
+		   stays at INT_MAX after mu_end_panel updates content_size. The
+		   real fix happens after mu_end_panel below: we set scroll.y to
+		   the freshly-computed max so next begin_panel's clamp is a
+		   no-op AND this same value is used by the *next* frame's
+		   layout. */
+		int want_scroll_to_bottom = needs_scroll_to_bottom
+									|| (messages_changed && was_at_bottom);
+		if(want_scroll_to_bottom) {
 			panel->scroll.y = 0x7FFFFFFF;
 			needs_scroll_to_bottom = 0;
-		} else if(messages_changed && was_at_bottom) {
-			needs_scroll_to_bottom = 1;
 		}
 
 		if(line_count == 0 && chathistory_count() == 0) {
@@ -1242,6 +1239,19 @@ static void hud_chatlog_render(mu_Context* ctx, float scalex, float scaley) {
 		linkmodal_render(ctx);
 
 		mu_end_panel(ctx);
+		/* content_size is now updated. Pin scroll.y to the true new max
+		   so that (a) next frame's begin_panel clamp is a no-op, and
+		   (b) layout->body.y - scroll.y in the next frame's row layout
+		   produces the bottom-aligned positions we want. Without this,
+		   a stuck INT_MAX gets clamped to whatever stale max microui
+		   sees on the next begin_panel (which uses last-frame content_size
+		   if anything else messes with it - belt and braces). */
+		if(want_scroll_to_bottom) {
+			int true_max = panel->content_size.y + ctx->style->padding * 2
+						 - panel->body.h;
+			if(true_max < 0) true_max = 0;
+			panel->scroll.y = true_max;
+		}
 		mu_end_window(ctx);
 	}
 
@@ -1334,6 +1344,25 @@ static void hud_chatlog_mouseclick(double x, double y, int button, int action, i
 			   macOS setups where two-finger right-click isn't enabled. */
 			if((mods || window_super_down()) && has_selection()) {
 				copy_selection_to_clipboard();
+				return;
+			}
+			/* Shift + LMB extends the existing selection to the click
+			   position. mods bitmask doesn't carry shift, so check the
+			   key state directly. */
+			if(window_shift_down() && has_selection()) {
+				int ln = -1, ch = 0;
+				for(int i = 0; i < line_count; i++) {
+					mu_Rect rr = lines[i].rect;
+					if(my >= rr.y && my < rr.y + rr.h) { ln = i; break; }
+				}
+				if(ln >= 0 && !lines[ln].is_placeholder) {
+					mu_Rect rr = lines[ln].rect;
+					ch = plain_char_at_offset(lines[ln].plain, lines[ln].plain_len,
+											  (float)(mx - rr.x));
+					sel_active_line = ln;
+					sel_active_char = ch;
+					lmb_dragging = 1;
+				}
 				return;
 			}
 			/* Resolve the URL under the press now; we'll commit on release

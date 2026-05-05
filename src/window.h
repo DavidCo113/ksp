@@ -132,6 +132,7 @@ const char* window_clipboard(void);
 void window_setclipboard(const char* text);
 int window_key_down(int key);
 int window_super_down(void);
+int window_shift_down(void);
 void window_cursor_hand(int on);
 void window_open_url(const char* url);
 void window_mousemode(int mode);
