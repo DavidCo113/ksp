@@ -142,6 +142,72 @@ static int hand_cursor_active = 0;
    a runaway selection. */
 static mu_Rect content_body_rect = {0, 0, 0, 0};
 
+/* ---------------------------------------------------------------- */
+/*  Find-in-chat (Notepad-style search bar)                         */
+/* ---------------------------------------------------------------- */
+
+#define CHATLOG_SEARCH_QUERY_MAX   96
+#define CHATLOG_SEARCH_BAR_H       28
+/* Cap on tracked matches per render. Worst case for the per-frame
+   match build is line_count * matches_per_line; with line_count up to
+   CHATLOG_MAX_LINES (2048) and a degenerate query like "a" against a
+   chat full of "aaa...", match_count would otherwise grow without
+   bound. 4096 covers ~2 hits per visible line, which is more than
+   anyone navigates manually anyway - hits past the cap are silently
+   dropped and the counter clamps. */
+#define CHATLOG_SEARCH_MAX_MATCHES 4096
+
+/* GLFW raw key codes we detect via the `internal` parameter on the
+   keyboard callback - the configurable WINDOW_KEY_* mapping doesn't
+   cover the alphabetic letters we need (F for Ctrl+F), so we look at
+   the raw code instead. Same trick as the chat input's Home/End. */
+#define CHATLOG_GLFW_KEY_F  70
+
+struct search_match {
+	int line;       /* index into `lines` */
+	int char_start; /* byte offset into lines[line].plain (inclusive) */
+	int char_end;   /* exclusive */
+};
+
+enum {
+	SEARCH_NAV_NONE = 0,
+	SEARCH_NAV_LAST,    /* jump to the most recent match (post query edit) */
+	SEARCH_NAV_NEXT,
+	SEARCH_NAV_PREV,
+};
+
+static int   search_visible    = 0;
+static char  search_query[CHATLOG_SEARCH_QUERY_MAX] = {0};
+static int   search_query_len  = 0;
+static struct search_match search_matches[CHATLOG_SEARCH_MAX_MATCHES];
+static int   search_match_count = 0;
+static int   search_current     = 0;       /* index into search_matches */
+/* Per-line offset into search_matches: matches whose .line == i live
+   in the half-open range [matches_line_start[i], matches_line_start[i+1]).
+   Lets render_chat_line dispatch only that line's hits instead of
+   scanning the full match array per row. The +1 slot holds the total
+   match count as a sentinel. */
+static int   matches_line_start[CHATLOG_MAX_LINES + 1] = {0};
+/* Pending navigation request set by user input (key/click) and applied
+   in render after recompute_matches has the fresh match array. We
+   can't apply navigation eagerly because the matches don't exist yet -
+   they're rebuilt every frame from the freshly-laid-out visible lines. */
+static int   search_nav_request = SEARCH_NAV_NONE;
+/* Match index whose line should be scrolled into view this frame; -1
+   means no pending scroll. Set after navigation is applied; consumed
+   AFTER mu_end_panel below so it overrides the bottom-stick logic
+   (otherwise an incoming live message during navigation snaps the
+   user back to "now" instead of leaving them on the hit). */
+static int   search_pending_scroll = -1;
+
+/* Hit rects for the search bar widgets, populated each render so the
+   mouse handler can dispatch clicks. Zeroed out when the bar is
+   hidden so stale rects don't accidentally swallow clicks. */
+static mu_Rect search_bar_rect    = {0, 0, 0, 0};
+static mu_Rect search_btn_prev    = {0, 0, 0, 0};
+static mu_Rect search_btn_next    = {0, 0, 0, 0};
+static mu_Rect search_btn_close   = {0, 0, 0, 0};
+
 static int is_url_byte(unsigned char c) {
 	if(c <= 0x20) return 0;
 	switch(c) {
@@ -855,6 +921,414 @@ static void resolve_mouse_target(mu_Context* ctx, int* out_line, int* out_char) 
 	*out_char = plain_char_at_offset(lines[best].plain, lines[best].plain_len, rel_x);
 }
 
+/* ---- Find-in-chat helpers ------------------------------------- */
+
+/* ASCII-only fold to lowercase. Chat content is overwhelmingly ASCII
+   in practice, and a UTF-8-aware case fold would balloon the search
+   path to no real benefit (you'd have to ICU-link the whole game).
+   Bytes 0x80+ are passed through unchanged - they'll match
+   byte-exactly across queries, which is the right behavior for the
+   small amount of non-ASCII that does show up (player names, emoji). */
+static int search_ascii_tolower(int c) {
+	return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+}
+
+/* Find first occurrence of `needle` (length needle_len) in `hay`
+   (length hay_len) starting at byte offset `from`, ASCII-case-
+   insensitive. Returns the start offset, or -1 if not found.
+
+   Plain O(n*m) - chat lines max out at 256 bytes and queries at ~96,
+   so the asymptotic win from KMP/Boyer-Moore would be drowned by the
+   setup cost. */
+static int search_find_ci(const char* hay, int hay_len,
+						  const char* needle, int needle_len, int from) {
+	if(needle_len <= 0 || hay_len < needle_len) return -1;
+	if(from < 0) from = 0;
+	int last = hay_len - needle_len;
+	for(int i = from; i <= last; i++) {
+		int ok = 1;
+		for(int j = 0; j < needle_len; j++) {
+			if(search_ascii_tolower((unsigned char)hay[i + j])
+			!= search_ascii_tolower((unsigned char)needle[j])) {
+				ok = 0;
+				break;
+			}
+		}
+		if(ok) return i;
+	}
+	return -1;
+}
+
+/* Rebuild the match array from the current `lines[]` snapshot. Cheap
+   enough to call every render frame - line_count is bounded and most
+   lines yield 0 matches against a typical query.
+
+   Also fills matches_line_start[] so render_chat_line can dispatch
+   per-line hits in O(matches_for_this_line) instead of O(total).
+   Placeholder lines (day separators, "N hidden" notes) are skipped:
+   they don't carry user-authored text and matching them would
+   highlight UI chrome. */
+static void search_recompute_matches(void) {
+	search_match_count = 0;
+	if(!search_visible || search_query_len == 0) {
+		/* Empty query: zero out the per-line index up through the
+		   current line count so the renderer's lookup is consistent. */
+		for(int i = 0; i <= line_count && i <= CHATLOG_MAX_LINES; i++)
+			matches_line_start[i] = 0;
+		search_current = 0;
+		return;
+	}
+
+	int last_line = -1;
+	for(int i = 0; i < line_count
+		&& search_match_count < CHATLOG_SEARCH_MAX_MATCHES; i++) {
+		/* Lines from last_line+1..i with no matches still need their
+		   start index recorded so the renderer's [start[i], start[i+1])
+		   range is well-defined. */
+		while(last_line < i) {
+			last_line++;
+			if(last_line <= CHATLOG_MAX_LINES)
+				matches_line_start[last_line] = search_match_count;
+		}
+		struct visible_line* vl = &lines[i];
+		if(vl->is_placeholder) continue;
+
+		int start = 0;
+		while(start <= vl->plain_len - search_query_len
+			  && search_match_count < CHATLOG_SEARCH_MAX_MATCHES) {
+			int hit = search_find_ci(vl->plain, vl->plain_len,
+									 search_query, search_query_len, start);
+			if(hit < 0) break;
+			search_matches[search_match_count].line = i;
+			search_matches[search_match_count].char_start = hit;
+			search_matches[search_match_count].char_end   = hit + search_query_len;
+			search_match_count++;
+			/* Advance past this match. We deliberately don't allow
+			   overlapping hits: searching "aa" in "aaaa" yields 2 hits
+			   ("aa", "aa"), not 3. Notepad behaves the same way. */
+			start = hit + search_query_len;
+		}
+	}
+	/* Trailing sentinel covers the rest of the index up through the
+	   one-past-end slot used by the renderer. */
+	while(last_line < line_count && last_line + 1 <= CHATLOG_MAX_LINES) {
+		last_line++;
+		matches_line_start[last_line] = search_match_count;
+	}
+
+	/* Clamp current after a rebuild - new lines may have shifted the
+	   match list around. The "stay on the same logical match" problem
+	   doesn't have a clean answer without per-match identity tracking;
+	   a clamp is the least-surprising fallback. */
+	if(search_match_count == 0) {
+		search_current = 0;
+	} else {
+		if(search_current < 0) search_current = 0;
+		if(search_current >= search_match_count)
+			search_current = search_match_count - 1;
+	}
+}
+
+/* Apply any pending nav request now that recompute_matches has run.
+   Sets search_pending_scroll so the post-panel scroll override can
+   bring the new current match into view. */
+static void search_apply_nav_request(void) {
+	if(search_nav_request == SEARCH_NAV_NONE) return;
+	if(search_match_count <= 0) {
+		search_nav_request = SEARCH_NAV_NONE;
+		return;
+	}
+	int n = search_match_count;
+	switch(search_nav_request) {
+		case SEARCH_NAV_LAST:
+			/* Newest message first: chat is bottom-anchored and the
+			   typical search ("did Bob just say X") wants the most
+			   recent occurrence, not the oldest. */
+			search_current = n - 1;
+			break;
+		case SEARCH_NAV_NEXT:
+			search_current = (search_current + 1) % n;
+			break;
+		case SEARCH_NAV_PREV:
+			/* Force a positive remainder - C's % preserves sign for
+			   negative dividends. */
+			search_current = ((search_current - 1) % n + n) % n;
+			break;
+		default: break;
+	}
+	search_pending_scroll = search_current;
+	search_nav_request = SEARCH_NAV_NONE;
+}
+
+static void search_open(void) {
+	if(search_visible) {
+		/* Already open: clear the query so the user can start a fresh
+		   search by typing immediately. Matches Notepad's "Ctrl+F
+		   focuses and selects the box" behavior closely enough for
+		   our purposes - we don't have selection in the box. */
+		search_query[0] = 0;
+		search_query_len = 0;
+		search_match_count = 0;
+		search_current = 0;
+		search_nav_request = SEARCH_NAV_NONE;
+		search_pending_scroll = -1;
+		return;
+	}
+	search_visible = 1;
+	search_query[0] = 0;
+	search_query_len = 0;
+	search_match_count = 0;
+	search_current = 0;
+	search_nav_request = SEARCH_NAV_NONE;
+	search_pending_scroll = -1;
+	/* Clearing this avoids the bar opening at the bottom of the log
+	   then immediately scrolling further - the very next render would
+	   see "user is at bottom + a frame just changed" and re-snap. */
+	needs_scroll_to_bottom = 0;
+}
+
+static void search_close(void) {
+	search_visible = 0;
+	search_query[0] = 0;
+	search_query_len = 0;
+	search_match_count = 0;
+	search_current = 0;
+	search_nav_request = SEARCH_NAV_NONE;
+	search_pending_scroll = -1;
+	search_bar_rect  = mu_rect(0, 0, 0, 0);
+	search_btn_prev  = mu_rect(0, 0, 0, 0);
+	search_btn_next  = mu_rect(0, 0, 0, 0);
+	search_btn_close = mu_rect(0, 0, 0, 0);
+}
+
+static void search_backspace(void) {
+	if(!search_visible || search_query_len <= 0) return;
+	/* Walk back over UTF-8 continuation bytes (0x80..0xBF) to land on
+	   the start of the previous codepoint. Mirrors the chat input's
+	   backspace behavior. */
+	int i = search_query_len - 1;
+	while(i > 0 && ((unsigned char)search_query[i] & 0xC0) == 0x80) i--;
+	search_query_len = i;
+	search_query[search_query_len] = 0;
+	/* On further query edits, jump to the newest hit rather than
+	   sticking to whatever index we were on - the user is steering
+	   the query, not navigating yet. */
+	search_nav_request = SEARCH_NAV_LAST;
+}
+
+int chatlog_search_active(void) {
+	return search_visible;
+}
+
+void chatlog_search_text_input(const char* utf8) {
+	if(!search_visible || !utf8 || !*utf8) return;
+	int n = (int)strlen(utf8);
+	/* Reject control bytes - the inline color-code range (1..7) and
+	   anything below 0x20. Plain text strips these out at line build
+	   time so they could never match the chat anyway, and accepting
+	   them would let a stray escape sequence sneak into the query
+	   and corrupt the rendered bar. */
+	for(int i = 0; i < n; i++) {
+		unsigned char c = (unsigned char)utf8[i];
+		if(c < 0x20) return;
+	}
+	int cap = (int)sizeof(search_query) - 1;
+	if(search_query_len + n > cap) n = cap - search_query_len;
+	if(n <= 0) return;
+	memcpy(search_query + search_query_len, utf8, n);
+	search_query_len += n;
+	search_query[search_query_len] = 0;
+	/* See search_backspace: typing also resets focus to the most
+	   recent hit. */
+	search_nav_request = SEARCH_NAV_LAST;
+}
+
+/* Pull text from the system clipboard into the search query. Hooked
+   up by the keyboard handler on Ctrl/Cmd+V while the bar has focus. */
+static void search_paste_clipboard(void) {
+	const char* clip = window_clipboard();
+	if(!clip || !*clip) return;
+	chatlog_search_text_input(clip);
+}
+
+/* Pixel layout for the search bar buttons. Called both from the
+   renderer and from the click handler so the rects stay in sync.
+   `bar` is the full-width row reserved for the bar in the parent
+   window; layout is right-aligned: [×] [↓] [↑] [counter] | query. */
+static void search_layout_bar(mu_Rect bar) {
+	int btn_h = bar.h - 8;
+	int btn_w = btn_h;       /* square icon-style buttons */
+	int gap   = 4;
+	int right = bar.x + bar.w - 6;
+
+	search_btn_close = mu_rect(right - btn_w, bar.y + 4, btn_w, btn_h);
+	right = search_btn_close.x - gap;
+
+	search_btn_next  = mu_rect(right - btn_w, bar.y + 4, btn_w, btn_h);
+	right = search_btn_next.x - gap;
+
+	search_btn_prev  = mu_rect(right - btn_w, bar.y + 4, btn_w, btn_h);
+}
+
+/* Draw the bar. Caller has already laid out the row via
+   mu_layout_row + mu_layout_next, so `bar` is in screen coords. */
+static void search_render_bar(mu_Context* ctx, mu_Rect bar) {
+	search_bar_rect = bar;
+	search_layout_bar(bar);
+
+	int mx = ctx->mouse_pos.x, my = ctx->mouse_pos.y;
+	int hov_prev  = mx >= search_btn_prev.x  && mx < search_btn_prev.x  + search_btn_prev.w
+				 && my >= search_btn_prev.y  && my < search_btn_prev.y  + search_btn_prev.h;
+	int hov_next  = mx >= search_btn_next.x  && mx < search_btn_next.x  + search_btn_next.w
+				 && my >= search_btn_next.y  && my < search_btn_next.y  + search_btn_next.h;
+	int hov_close = mx >= search_btn_close.x && mx < search_btn_close.x + search_btn_close.w
+				 && my >= search_btn_close.y && my < search_btn_close.y + search_btn_close.h;
+
+	/* Bar background - a touch lighter than the filter banner so the
+	   two stack visibly when both are active. */
+	mu_draw_rect(ctx, bar, mu_color(50, 55, 70, 220));
+	mu_draw_box(ctx, bar,  mu_color(120, 130, 160, 255));
+
+	mu_Color fg     = mu_color(230, 230, 230, 255);
+	mu_Color dim    = mu_color(160, 160, 170, 255);
+	mu_Color label  = mu_color(180, 200, 230, 255);
+
+	int th = ctx->text_height(ctx->style->font);
+	int text_y = bar.y + (bar.h - th) / 2;
+
+	/* "Find:" label, query text, then a thin caret to indicate focus.
+	   We don't blink it - blinking requires owning a clock here, and
+	   the bar is short-lived enough that a static caret reads fine. */
+	int x = bar.x + 8;
+	const char* prefix = "Find:";
+	int pw = ctx->text_width(ctx->style->font, prefix, 0);
+	mu_draw_text(ctx, ctx->style->font, prefix, -1,
+				 mu_vec2(x, text_y), label);
+	x += pw + 8;
+
+	/* Reserve room on the right for the buttons + counter so the query
+	   text gets clipped instead of overlapping. */
+	int right_reserved = (bar.x + bar.w) - search_btn_prev.x + 8;
+	int counter_reserved = 70;     /* "9999/9999" worst case fits */
+	int query_max_x = bar.x + bar.w - right_reserved - counter_reserved;
+	if(query_max_x < x + 40) query_max_x = x + 40; /* sanity floor */
+
+	if(search_query_len > 0) {
+		/* Color the typed query red when there are no matches - same
+		   convention as Firefox/Chrome's find bar. */
+		mu_Color qc = (search_match_count > 0) ? fg : mu_color(240, 120, 120, 255);
+		/* Draw inside a clip rect so an over-long query doesn't bleed
+		   into the buttons. */
+		mu_push_clip_rect(ctx, mu_rect(x, bar.y, query_max_x - x, bar.h));
+		mu_draw_text(ctx, ctx->style->font, search_query, search_query_len,
+					 mu_vec2(x, text_y), qc);
+		mu_pop_clip_rect(ctx);
+		float qw = font_length((float)CHATLOG_TEXT_HEIGHT, search_query);
+		int caret_x = x + (int)qw + 1;
+		if(caret_x > query_max_x - 2) caret_x = query_max_x - 2;
+		mu_draw_rect(ctx, mu_rect(caret_x, bar.y + 5, 1, bar.h - 10), fg);
+	} else {
+		/* Empty-state hint, dimmed. The hint and caret share a slot. */
+		const char* hint = "type to search messages";
+		mu_push_clip_rect(ctx, mu_rect(x, bar.y, query_max_x - x, bar.h));
+		mu_draw_text(ctx, ctx->style->font, hint, -1,
+					 mu_vec2(x, text_y), dim);
+		mu_pop_clip_rect(ctx);
+		mu_draw_rect(ctx, mu_rect(x, bar.y + 5, 1, bar.h - 10), fg);
+	}
+
+	/* Match counter, right-aligned just before the prev button. */
+	char counter[32];
+	if(search_query_len == 0) counter[0] = 0;
+	else if(search_match_count == 0) snprintf(counter, sizeof(counter), "no results");
+	else snprintf(counter, sizeof(counter), "%d / %d",
+				  search_current + 1, search_match_count);
+	if(counter[0]) {
+		int cw = ctx->text_width(ctx->style->font, counter, 0);
+		mu_draw_text(ctx, ctx->style->font, counter, -1,
+					 mu_vec2(search_btn_prev.x - cw - 8, text_y),
+					 (search_match_count == 0 && search_query_len > 0)
+						? mu_color(240, 120, 120, 255)
+						: fg);
+	}
+
+	/* Buttons. Drawn as boxes with a small glyph - microui doesn't
+	   give us proper icon assets to reuse for prev/next here, so we
+	   render the arrow as a text glyph (Unicode-safe in this font). */
+	int can_nav = (search_match_count > 0);
+	mu_Color btn_bg_idle = mu_color(60, 65, 80, 255);
+	mu_Color btn_bg_hov  = mu_color(90, 100, 130, 255);
+	mu_Color btn_bg_off  = mu_color(45, 48, 58, 255);
+	mu_Color btn_border  = mu_color(140, 150, 180, 255);
+
+	mu_draw_rect(ctx, search_btn_prev,
+				 !can_nav ? btn_bg_off : (hov_prev ? btn_bg_hov : btn_bg_idle));
+	mu_draw_box(ctx, search_btn_prev, btn_border);
+	mu_draw_rect(ctx, search_btn_next,
+				 !can_nav ? btn_bg_off : (hov_next ? btn_bg_hov : btn_bg_idle));
+	mu_draw_box(ctx, search_btn_next, btn_border);
+	mu_draw_rect(ctx, search_btn_close,
+				 hov_close ? mu_color(140, 70, 70, 255) : mu_color(80, 50, 50, 255));
+	mu_draw_box(ctx, search_btn_close, mu_color(180, 120, 120, 255));
+
+	const char* up_glyph    = "\xE2\x86\x91"; /* U+2191 */
+	const char* down_glyph  = "\xE2\x86\x93"; /* U+2193 */
+	const char* close_glyph = "\xC3\x97";     /* U+00D7 */
+	mu_Color glyph_col = can_nav ? fg : dim;
+
+	int gw, gh = th;
+	gw = ctx->text_width(ctx->style->font, up_glyph, 0);
+	mu_draw_text(ctx, ctx->style->font, up_glyph, -1,
+				 mu_vec2(search_btn_prev.x + (search_btn_prev.w - gw) / 2,
+						 search_btn_prev.y + (search_btn_prev.h - gh) / 2),
+				 glyph_col);
+	gw = ctx->text_width(ctx->style->font, down_glyph, 0);
+	mu_draw_text(ctx, ctx->style->font, down_glyph, -1,
+				 mu_vec2(search_btn_next.x + (search_btn_next.w - gw) / 2,
+						 search_btn_next.y + (search_btn_next.h - gh) / 2),
+				 glyph_col);
+	gw = ctx->text_width(ctx->style->font, close_glyph, 0);
+	mu_draw_text(ctx, ctx->style->font, close_glyph, -1,
+				 mu_vec2(search_btn_close.x + (search_btn_close.w - gw) / 2,
+						 search_btn_close.y + (search_btn_close.h - gh) / 2),
+				 fg);
+}
+
+/* Hit-test the search bar widgets. Returns 1 if the click was handled
+   (and the caller should stop further dispatch), 0 otherwise. */
+static int search_handle_click(int mx, int my) {
+	if(!search_visible) return 0;
+	if(search_btn_prev.w > 0
+	   && mx >= search_btn_prev.x && mx < search_btn_prev.x + search_btn_prev.w
+	   && my >= search_btn_prev.y && my < search_btn_prev.y + search_btn_prev.h) {
+		search_nav_request = SEARCH_NAV_PREV;
+		return 1;
+	}
+	if(search_btn_next.w > 0
+	   && mx >= search_btn_next.x && mx < search_btn_next.x + search_btn_next.w
+	   && my >= search_btn_next.y && my < search_btn_next.y + search_btn_next.h) {
+		search_nav_request = SEARCH_NAV_NEXT;
+		return 1;
+	}
+	if(search_btn_close.w > 0
+	   && mx >= search_btn_close.x && mx < search_btn_close.x + search_btn_close.w
+	   && my >= search_btn_close.y && my < search_btn_close.y + search_btn_close.h) {
+		search_close();
+		return 1;
+	}
+	/* A click anywhere ELSE within the bar still shouldn't fall through
+	   into the chat panel below (it'd start a text selection on a
+	   chat line that happened to share the y range, which does not
+	   happen here because the bar is laid out outside the panel, but
+	   defending against future layout shuffles is cheap). */
+	if(search_bar_rect.w > 0
+	   && mx >= search_bar_rect.x && mx < search_bar_rect.x + search_bar_rect.w
+	   && my >= search_bar_rect.y && my < search_bar_rect.y + search_bar_rect.h) {
+		return 1;
+	}
+	return 0;
+}
+
 static void render_chat_line(mu_Context* ctx, int line_index) {
 	struct visible_line* vl = &lines[line_index];
 
@@ -882,6 +1356,40 @@ static void render_chat_line(mu_Context* ctx, int line_index) {
 					 mu_vec2(tx, r.y + (r.h - ctx->text_height(ctx->style->font)) / 2),
 					 text_col);
 		return;
+	}
+
+	/* Search highlight pass. Drawn first so the selection highlight
+	   (drawn next, below) and the eventual text glyphs both stack on
+	   top of it. We dispatch via matches_line_start so this is
+	   O(matches_for_this_line), not O(total_matches).
+
+	   Lines beyond CHATLOG_MAX_LINES would index out of bounds on
+	   matches_line_start; defend explicitly even though line_count is
+	   already bounded by the same constant. */
+	if(search_visible && search_match_count > 0
+	   && line_index >= 0 && line_index < CHATLOG_MAX_LINES) {
+		int from_m = matches_line_start[line_index];
+		int to_m   = (line_index + 1 <= CHATLOG_MAX_LINES)
+					? matches_line_start[line_index + 1]
+					: search_match_count;
+		for(int m = from_m; m < to_m && m < search_match_count; m++) {
+			int from_c = search_matches[m].char_start;
+			int to_c   = search_matches[m].char_end;
+			if(from_c < 0) from_c = 0;
+			if(to_c > vl->plain_len) to_c = vl->plain_len;
+			if(to_c <= from_c) continue;
+			float x0 = plain_prefix_width(vl->plain, from_c);
+			float x1 = plain_prefix_width(vl->plain, to_c);
+			int rect_x = r.x + (int)x0;
+			int rect_w = (int)(x1 - x0);
+			if(rect_w <= 0) continue;
+			/* Current match: brighter, more opaque so it stands out
+			   even when adjacent matches sit nearby on the same line. */
+			mu_Color hl = (m == search_current)
+				? mu_color(255, 150,  30, 220)    /* current: orange */
+				: mu_color(240, 220,  60, 130);   /* others:  yellow */
+			mu_draw_rect(ctx, mu_rect(rect_x, r.y, rect_w, r.h), hl);
+		}
 	}
 
 	if(has_selection()) {
@@ -1006,6 +1514,11 @@ static void hud_chatlog_init(void) {
 	filter_hide_server = 0;
 	filter_clear_btn = mu_rect(0, 0, 0, 0);
 	filter_server_btn = mu_rect(0, 0, 0, 0);
+	/* Search state. Closing on every (re-)entry into the HUD is
+	   intentional - dropping back into the chatlog with a stale query
+	   from a previous session would highlight matches against text
+	   the user can no longer see in context. */
+	search_close();
 	chathistory_reset();
 	if(hand_cursor_active) {
 		window_cursor_hand(0);
@@ -1038,6 +1551,20 @@ static void hud_chatlog_render(mu_Context* ctx, float scalex, float scaley) {
 		cnt->rect = frame;
 
 		hud_common_nav_for_chatlog(ctx, &frame, scalex, scaley);
+
+		/* Search bar lives above the filter banner so both can stack
+		   visibly when the user is filtering AND searching at once -
+		   a common combination ("show only Bob's messages, find 'gg'"). */
+		if(search_visible) {
+			mu_layout_row(ctx, 1, (int[]) { -1 }, CHATLOG_SEARCH_BAR_H);
+			mu_Rect sbar = mu_layout_next(ctx);
+			search_render_bar(ctx, sbar);
+		} else {
+			search_bar_rect  = mu_rect(0, 0, 0, 0);
+			search_btn_prev  = mu_rect(0, 0, 0, 0);
+			search_btn_next  = mu_rect(0, 0, 0, 0);
+			search_btn_close = mu_rect(0, 0, 0, 0);
+		}
 
 		if(filter_active()) {
 			mu_layout_row(ctx, 1, (int[]) { -1 }, 24);
@@ -1110,6 +1637,14 @@ static void hud_chatlog_render(mu_Context* ctx, float scalex, float scaley) {
 		int cur_hc = chathistory_count();
 
 		build_visible_lines();
+
+		/* Search index lives in line-space, so it has to be rebuilt
+		   the moment the visible_lines array is. We do it here -
+		   before the prepend-anchor and bottom-stick logic - so any
+		   pending nav request can resolve into a concrete pending
+		   scroll target that the post-panel scroll override picks up. */
+		search_recompute_matches();
+		search_apply_nav_request();
 
 		/* Anchor the user's reading position only when the growth came
 		   from chathistory (lines prepended at the top). Live additions
@@ -1252,6 +1787,38 @@ static void hud_chatlog_render(mu_Context* ctx, float scalex, float scaley) {
 			if(true_max < 0) true_max = 0;
 			panel->scroll.y = true_max;
 		}
+		/* Search-navigation scroll override. Runs AFTER the bottom-
+		   stick block above so that pressing "next match" while a new
+		   live message lands on the same frame keeps the user on the
+		   match instead of yanking them back to "now". The line rect
+		   used here was just populated by render_chat_line above, so
+		   coordinates are valid for this frame; setting scroll.y now
+		   takes effect on the NEXT frame's layout - same one-frame
+		   delay as the bottom-stick path. */
+		if(search_pending_scroll >= 0
+		   && search_pending_scroll < search_match_count) {
+			int line_idx = search_matches[search_pending_scroll].line;
+			if(line_idx >= 0 && line_idx < line_count
+			   && lines[line_idx].rect.h > 0) {
+				int line_screen_y = lines[line_idx].rect.y;
+				/* rect.y is in screen coords; convert to content-y by
+				   undoing the panel offset and adding back the current
+				   scroll. */
+				int content_y = line_screen_y - panel->body.y + panel->scroll.y;
+				/* Park the match about a third of the way down the
+				   visible area: centering hides it behind a too-active
+				   "is at bottom?" check, and pinning to the top means
+				   no context above the hit. A third reads naturally. */
+				int target = content_y - panel->body.h / 3;
+				int cs_h = panel->content_size.y + ctx->style->padding * 2;
+				int max_scroll = cs_h - panel->body.h;
+				if(max_scroll < 0) max_scroll = 0;
+				if(target < 0) target = 0;
+				if(target > max_scroll) target = max_scroll;
+				panel->scroll.y = target;
+			}
+			search_pending_scroll = -1;
+		}
 		mu_end_window(ctx);
 	}
 
@@ -1270,6 +1837,14 @@ static void hud_chatlog_keyboard(int key, int action, int mods, int internal) {
 			ctxmenu_hide();
 			return;
 		}
+		/* Esc closes the search bar before bailing on the whole HUD -
+		   matches user expectation set by every find-in-page UI on
+		   the planet, and keeps the second Esc available for "back
+		   to game". */
+		if(search_visible) {
+			search_close();
+			return;
+		}
 		/* Single ESC returns to gameplay cleanly. The previous handler kept
 		   show_exit set, which left hud_ingame in menu-mode and froze input
 		   until a second ESC press. */
@@ -1279,6 +1854,58 @@ static void hud_chatlog_keyboard(int key, int action, int mods, int internal) {
 	}
 
 	if(linkmodal_visible) return;
+
+	/* Ctrl+F / Cmd+F toggles the search bar. We look at `internal`
+	   (raw GLFW key code) rather than a translated WINDOW_KEY_*
+	   because the letter F isn't reliably bound through the
+	   keybinding config - same trick the chat input uses for
+	   Home/End. */
+	if(internal == CHATLOG_GLFW_KEY_F && (mods || window_super_down())) {
+		search_open();
+		return;
+	}
+
+	/* When the search bar is open, it captures navigation and editing
+	   keys so the user can drive the search without their keystrokes
+	   being interpreted as game-style shortcuts. Other keys still
+	   fall through to the existing handlers below (Ctrl+C still
+	   copies the chat selection, etc.) - this is intentional, the
+	   search bar isn't a modal. */
+	if(search_visible) {
+		/* Ctrl/Cmd+V pastes from clipboard into the query. Mirrors
+		   the chat input's paste path. */
+		if(key == WINDOW_KEY_V && (mods || window_super_down())) {
+			search_paste_clipboard();
+			return;
+		}
+		if(key == WINDOW_KEY_BACKSPACE) {
+			search_backspace();
+			return;
+		}
+		/* Enter / F3 / arrow-down advance; Shift with any of these
+		   walks backward. window_shift_down() reads live key state
+		   because mods doesn't carry the shift bit in this
+		   keyboard pipeline. */
+		if(key == WINDOW_KEY_ENTER || key == WINDOW_KEY_F3
+		   || key == WINDOW_KEY_CURSOR_DOWN) {
+			search_nav_request = window_shift_down() ? SEARCH_NAV_PREV : SEARCH_NAV_NEXT;
+			return;
+		}
+		if(key == WINDOW_KEY_CURSOR_UP) {
+			search_nav_request = SEARCH_NAV_PREV;
+			return;
+		}
+	}
+
+	/* F3 outside the search bar still acts as "find next" if there's
+	   an active search - convenient when the user closed the bar but
+	   wants to keep stepping through hits. (Closed bar = no hits, so
+	   this is a no-op in that case; the branch is here for symmetry
+	   with editor conventions.) */
+	if(!search_visible && key == WINDOW_KEY_F3 && search_match_count > 0) {
+		search_nav_request = window_shift_down() ? SEARCH_NAV_PREV : SEARCH_NAV_NEXT;
+		return;
+	}
 
 	if(key == WINDOW_KEY_C && (mods || window_super_down())) {
 		copy_selection_to_clipboard();
@@ -1308,6 +1935,12 @@ static void hud_chatlog_mouseclick(double x, double y, int button, int action, i
 				ctxmenu_hide();
 				return;
 			}
+			/* Search bar widgets take priority - they sit above the
+			   filter banner and the content panel, and dispatching
+			   them here (before the content_body_rect rejection)
+			   keeps the prev/next/close buttons working without
+			   accidentally starting a text selection. */
+			if(search_handle_click(mx, my)) return;
 			/* Filter clear button takes priority over selection drag. */
 			if(filter_active() && filter_clear_btn.w > 0
 			   && mx >= filter_clear_btn.x && mx < filter_clear_btn.x + filter_clear_btn.w

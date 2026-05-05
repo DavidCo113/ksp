@@ -45,6 +45,7 @@
 #include "matrix.h"
 #include "texture.h"
 #include "chunk.h"
+#include "chatlog.h"
 #include "main.h"
 
 int fps = 0;
@@ -616,6 +617,20 @@ void text_input(struct window_instance* window, const char* utf8) {
 
 	if(hud_active->ctx)
 		mu_input_text(hud_active->ctx, utf8);
+
+	/* Chatlog search has its own per-frame text buffer; route to it
+	   when the user is on the chatlog HUD with the search bar open.
+	   The HUD doesn't use a microui textbox (selection, context menu,
+	   and link modal are all hand-rolled there), so without this hook
+	   typed characters would feed mu_input_text above and then drop
+	   into the chat input branch below - which short-circuits anyway
+	   because chat_input_mode is always CHAT_NO_INPUT while the
+	   chatlog HUD is active. Net result: the search bar would render
+	   but never see a single character. */
+	if(hud_active == &hud_chatlog && chatlog_search_active()) {
+		chatlog_search_text_input(utf8);
+		return;
+	}
 
 	if(chat_input_mode == CHAT_NO_INPUT)
 		return;
