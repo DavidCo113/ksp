@@ -333,7 +333,7 @@ void read_PacketStateData(void* data, int len) {
 	chat_popup_duration = 0;
 
 	log_info("map data was %i bytes", compressed_chunk_data_offset);
-	if(!network_map_cached) {
+	if(!network_map_cached && compressed_chunk_data && compressed_chunk_data_offset > 0) {
 		int avail_size = 1024 * 1024;
 		void* decompressed = malloc(avail_size);
 		CHECK_ALLOCATION_ERROR(decompressed)
@@ -364,12 +364,11 @@ void read_PacketStateData(void* data, int len) {
 			if(r == LIBDEFLATE_BAD_DATA || r == LIBDEFLATE_SHORT_OUTPUT)
 				break;
 		}
-		free(decompressed);
-		free(compressed_chunk_data);
+free(decompressed);
 		libdeflate_free_decompressor(d);
 	}
+	compressed_chunk_data_offset = 0;
 }
-
 void read_PacketFogColor(void* data, int len) {
 	struct PacketFogColor* p = (struct PacketFogColor*)data;
 	fog_color[0] = p->red / 255.0F;
@@ -462,11 +461,14 @@ void read_PacketPlayerLeft(void* data, int len) {
 
 void read_PacketMapStart(void* data, int len) {
 	// ffs someone fix the wrong map size of 1.5mb
+	if(compressed_chunk_data) {
+		free(compressed_chunk_data);
+		compressed_chunk_data = NULL;
+	}
 	compressed_chunk_data_size = 1024 * 1024;
 	compressed_chunk_data = malloc(compressed_chunk_data_size);
 	CHECK_ALLOCATION_ERROR(compressed_chunk_data)
-	compressed_chunk_data_offset = 0;
-	network_logged_in = 0;
+	compressed_chunk_data_offset = 0;	network_logged_in = 0;
 	network_map_transfer = 1;
 	network_map_cached = 0;
 

@@ -812,9 +812,22 @@ glColor3ub(255, 255, 255);
 char buffer[512];
 unsigned int i = 0;
 for(c = chat[channel][idx]; *c != '\0'; c++) {
+if((unsigned char)*c == 0xFF) {
+buffer[i] = '\0';
+float len = font_length(16.F, buffer) - 2.F;
+if(channel != 0) {
+hud_font_render(x, y, 16.F, buffer, .4F);
+} else {
+if(is_mentioned)
+glColor3ub(settings.chat_mention_r, settings.chat_mention_g, settings.chat_mention_b);
+font_render(x, y, 16.F, buffer);
+}
+x += len;
+i = 0;
+continue;
+}
 // Chat color codes are 1..7; everything else (including UTF-8 high bytes) is text.
-if((unsigned char)*c > 7) {
-buffer[i++] = *c;
+if((unsigned char)*c > 7) {buffer[i++] = *c;
 if(*(c + 1) != '\0') {
 continue;
 }

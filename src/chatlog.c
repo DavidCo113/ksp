@@ -303,6 +303,7 @@ static int strip_color_codes_n(const char* src, int max_bytes, char* dst) {
 		unsigned char c = (unsigned char)src[i];
 		if(c == '\n') break;
 		if(c >= 1 && c <= 7) continue;
+		if(c == 0xFF) continue;
 		dst[j++] = src[i];
 	}
 	dst[j] = 0;
@@ -1520,18 +1521,14 @@ static void render_chat_line(mu_Context* ctx, int line_index) {
 		unsigned char c = (unsigned char)raw[i];
 		int is_segment_end = (vl->raw_len >= 0 && i >= vl->raw_len);
 		int is_code = (!is_segment_end) && (c >= 1 && c <= 7);
+		int is_marker = (!is_segment_end) && (c == 0xFF);
 		int is_end  = is_segment_end || (c == 0) || (c == '\n');
-		int in_url  = (!is_code && !is_end)
+		int in_url  = (!is_code && !is_marker && !is_end)
 					  ? (url_at_position(line_index, plain_offset) >= 0)
 					  : run_in_url;
 		int boundary = (run_len > 0) && (in_url != run_in_url);
 
-		if(is_code || is_end || boundary) {
-			/* Flush whatever the run holds. URL bytes are intentionally
-			   skipped here; the URL overlay pass below paints them in
-			   link color. Drawing them twice (here and there) was what
-			   made periods merge into the underline and made glyphs look
-			   bold, e.g. claude.ai reading as "claude_ai". */
+		if(is_code || is_marker || is_end || boundary) {
 			if(run_len > 0 && !run_in_url) {
 				run[run_len] = 0;
 				float x = plain_prefix_width(vl->plain, run_start_offset);
@@ -1541,8 +1538,7 @@ static void render_chat_line(mu_Context* ctx, int line_index) {
 			run_len = 0;
 			if(is_end) break;
 			if(is_code) { cur = color_for_inline_code(c); continue; }
-			/* boundary only: fall through to start a new run with the
-			   current byte. */
+			if(is_marker) continue;
 		}
 
 		if(run_len == 0) {
