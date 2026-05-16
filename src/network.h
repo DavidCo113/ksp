@@ -19,6 +19,7 @@
 
 #ifndef NETWORK_H
 #define NETWORK_H
+#include <stdint.h>
 
 #if defined(__amd64__) || defined(__x86_64__)
 #define BS_VER_ARCH "x86_64"
