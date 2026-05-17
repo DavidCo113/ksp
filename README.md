@@ -9,6 +9,7 @@ This project is a modified fork of [ButterSpades](https://github.com/utf-4096/bu
 | **Gun Sound Variability** | Each time a shot is fired the sound's pitch and loudness are changed randomly to give it a slightly different but similar sound every time, which is a lot better than the very same sound every time. |
 | **Dynamic FOV** | Fov increases while running and decreases while crouching (has smooth animations) making gameplay feel much better. |
 | **Chat Log Menu** | Chat log menu with filters for messages from specific players/the server and ability to select and copy text. |
+| **Weather Added** | Weather settings added where you can turn on rain/snow. |
 | **AO Multiplier** | Increases ambient occlusion strength (up to 5x) for deeper visual depth. |
 | **Spectator ESP** | Enables ESP functionality while in spectator mode. |
 | **Custom Mentions** | Highlight chat messages containing specific words with a customizable color. |
