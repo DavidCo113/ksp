@@ -131,6 +131,7 @@ void config_save() {
 	config_seti("client", "auto_demo_recording", settings.auto_demo_recording);
 	config_seti("client", "rain", settings.rain);
 	config_seti("client", "snow", settings.snow);
+	config_seti("client", "snow_3d", settings.snow_3d);
 	config_setf("client", "rifle_ads_fov", settings.rifle_ads_fov);
 	config_setf("client", "shotgun_ads_fov", settings.shotgun_ads_fov);
 	config_setf("client", "smg_ads_fov", settings.smg_ads_fov);
@@ -210,6 +211,7 @@ static int config_read_key(void* user, const char* section, const char* name, co
 		IMPORT_SETTING(settings.auto_demo_recording, auto_demo_recording, atoi(value));
 		IMPORT_SETTING(settings.rain, rain, atoi(value));
 		IMPORT_SETTING(settings.snow, snow, atoi(value));
+		IMPORT_SETTING(settings.snow_3d, snow_3d, atoi(value));
 		IMPORT_SETTING(settings.rifle_ads_fov, rifle_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
 		IMPORT_SETTING(settings.shotgun_ads_fov, shotgun_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
 		IMPORT_SETTING(settings.smg_ads_fov, smg_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
@@ -919,6 +921,17 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Enable snow weather effect",
 				 .name = "Snow",
+				 .category = "Weather",
+			 });
+
+	list_add(&config_settings,
+			 &(struct config_setting) {
+				 .value = &settings_tmp.snow_3d,
+				 .type = CONFIG_TYPE_INT,
+				 .min = 0,
+				 .max = 1,
+				 .help = "Enable 3D snow (full cube rendering)",
+				 .name = "3D Snow",
 				 .category = "Weather",
 			 });
 
