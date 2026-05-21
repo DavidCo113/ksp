@@ -34,6 +34,7 @@ jobs:
             mingw-w64-ucrt-x86_64-enet
             mingw-w64-ucrt-x86_64-libdeflate
             mingw-w64-ucrt-x86_64-python
+            zip
             make
 
       - name: Apply Windows fixes
