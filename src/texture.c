@@ -1,4 +1,3 @@
-#include <sys/stat.h>
 /*
 	Copyright (c) 2017-2020 ByteBit
 
@@ -370,7 +369,7 @@ static char* texture_get_random_bg() {
 	int png_count = 0;
 	struct dirent* entry;
 	while((entry = readdir(dir)) != NULL) {
-		struct stat st; char _stat_path[512]; snprintf(_stat_path, sizeof(_stat_path), "%s/%s", bg_folder, entry->d_name); stat(_stat_path, &st); if(S_ISREG(st.st_mode)) {
+		if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {
 			size_t len = strlen(entry->d_name);
 			if(len > 4 && strcmp(entry->d_name + len - 4, ".png") == 0) {
 				png_count++;
@@ -390,7 +389,7 @@ static char* texture_get_random_bg() {
 	rewinddir(dir);
 	int current = 0;
 	while((entry = readdir(dir)) != NULL) {
-		struct stat st; char _stat_path[512]; snprintf(_stat_path, sizeof(_stat_path), "%s/%s", bg_folder, entry->d_name); stat(_stat_path, &st); if(S_ISREG(st.st_mode)) {
+		if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {
 			size_t len = strlen(entry->d_name);
 			if(len > 4 && strcmp(entry->d_name + len - 4, ".png") == 0) {
 				if(current == target) {
