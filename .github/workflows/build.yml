@@ -1,0 +1,81 @@
+name: Build KyroSpades Windows
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6am UTC
+  workflow_dispatch:      # Also allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout your fork
+        uses: actions/checkout@v4
+
+      - name: Sync upstream KyroSpades
+        run: |
+          git remote add upstream https://github.com/Kyrope01/KyroSpades.git || true
+          git fetch upstream
+          git merge upstream/main --no-edit || true
+        shell: bash
+
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-glew
+            mingw-w64-ucrt-x86_64-openal
+            mingw-w64-ucrt-x86_64-enet
+            mingw-w64-ucrt-x86_64-libdeflate
+            mingw-w64-ucrt-x86_64-python
+            make
+
+      - name: Apply Windows fixes
+        shell: msys2 {0}
+        run: |
+          sed -i '1s/^/#include <stdint.h>\n/' src/network.h || true
+          sed -i '1s/^/#include <sys\/stat.h>\n/' src/texture.c || true
+          sed -i 's/if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {/struct stat st; char _stat_path[512]; snprintf(_stat_path, sizeof(_stat_path), "%s\/%s", bg_folder, entry->d_name); stat(_stat_path, \&st); if(S_ISREG(st.st_mode)) {/g' src/texture.c || true
+          sed -i 's/mkdir(dir_path, 0755)/mkdir(dir_path)/' src/demo.c || true
+          python3 fix_icon.py || true
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          mkdir -p build
+          cd build
+          cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
+          make -j$(nproc)
+
+      - name: Bundle DLLs
+        shell: msys2 {0}
+        run: |
+          cd build/KyroSpades
+          ldd client.exe | grep ucrt64 | awk '{print $3}' | xargs -I{} cp {} .
+
+      - name: Zip release
+        shell: msys2 {0}
+        run: |
+          cd build
+          zip -r KyroSpades-win64.zip KyroSpades/
+
+      - name: Get date for release tag
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Upload as GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ steps.date.outputs.date }}
+          name: KyroSpades ${{ steps.date.outputs.date }}
+          files: build/KyroSpades-win64.zip
+          body: Automated daily build synced from upstream KyroSpades.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
