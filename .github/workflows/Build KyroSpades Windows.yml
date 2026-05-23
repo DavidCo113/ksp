@@ -1,4 +1,3 @@
-name: Build KyroSpades Windows
 
 on:
   schedule:
@@ -36,13 +35,8 @@ jobs:
             mingw-w64-ucrt-x86_64-enet
             mingw-w64-ucrt-x86_64-libdeflate
             mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-png2ico
             zip
             make
-      - name: Convert PNG to ICO
-        shell: msys2 {0}
-        run: |
-          png2ico resources/icon.ico resources/icon.png
       - name: Apply Windows fixes
         shell: msys2 {0}
         run: |
