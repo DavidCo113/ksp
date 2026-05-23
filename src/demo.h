@@ -40,6 +40,15 @@ struct DemoPacketEntry {
     unsigned char* data;      /* heap-allocated; data[0] is the packet type id */
 };
 
+/* A decompressed VXL map captured at the moment its StateData was processed
+   during normal play, so a backward seek can restore the correct map. */
+struct DemoMapSnapshot {
+    float  timestamp;     /* StateData timestamp this map became active   */
+    int    packet_index;  /* index of that StateData packet in packets[]  */
+    void*  data;          /* heap-allocated decompressed VXL bytes        */
+    size_t size;
+};
+
 struct DemoPlayback {
     bool   active;
     bool   paused;
@@ -57,16 +66,20 @@ struct DemoPlayback {
 
     int    protocol_version;   /* 3 = 0.75, 4 = 0.76 */
 
-    /* Decompressed VXL map saved on first map load; used to reset world
-       state before a backward seek without re-parsing the demo file. */
-    void*  initial_map_data;
-    size_t initial_map_size;
+    /* Decompressed VXL snapshots, one per map load (StateData), so backward
+       seeks can restore the map that was active at the target time without
+       re-parsing the demo.  Sorted by timestamp in load order. */
+    struct DemoMapSnapshot* maps;
+    int    map_count;
+    int    map_capacity;
 };
 
 extern struct DemoPlayback DemoPlaybackState;
 
-/* Set to true during fast-replay passes so packet handlers know to skip
-   sounds, particles, and chat messages.  Read-only outside demo.c. */
+/* True only during a backward reset-replay, when the world has been restored
+   from the saved snapshot.  Tells the map packet handlers (MapStart/MapChunk/
+   StateData) to skip loading.  Effect-muting is handled separately by
+   demo_mute_effects().  Read-only outside demo.c. */
 extern bool demo_seeking;
 
 /* Open a .demo file and start playback.  Returns false on error. */

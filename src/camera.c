@@ -258,7 +258,7 @@ int* camera_terrain_pickEx(unsigned char mode, float gx0, float gy0, float gz0, 
 	ret[3] = ret[4] = ret[5] = 0;
 
 	while(1) {
-		if(gx >= map_size_x || gx < 0 || gy < 0 || gz >= map_size_z || gz < 0) {
+		if(gx >= map_size_x || gx < 0 || gy >= map_size_y || gy < 0 || gz >= map_size_z || gz < 0) {
 			return NULL;
 		}
 		switch(mode) {

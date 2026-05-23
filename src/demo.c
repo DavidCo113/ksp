@@ -151,7 +151,16 @@ bool demo_is_server_omited_packet(int id) {
    ═══════════════════════════════════════════════════════════════════ */
 
 struct DemoPlayback DemoPlaybackState;
-bool demo_seeking = false;
+
+/* Two independent fast-replay behaviours:
+   demo_seeking — backward reset-replay only.  The world was restored from
+     the saved snapshot, so map packets (MapStart/MapChunk/StateData) must be
+     suppressed.  network.c's map handlers test demo_is_seeking().
+   demo_muting  — any fast pass (forward OR backward).  Suppresses one-shot
+     effects (sounds, particles) so a seek isn't a wall of noise.  Map loads
+     and chat are NOT suppressed by this. */
+bool        demo_seeking = false;
+static bool demo_muting  = false;
 
 /* Convenience: safe cast because packets[] is declared in network.h */
 extern void (*packets[256])(void* data, int len);
@@ -206,13 +215,22 @@ float game_time(void) {
 }
 
 static void free_packets(void) {
-    if (!DemoPlaybackState.packets) return;
-    for (int i = 0; i < DemoPlaybackState.packet_count; i++)
-        free(DemoPlaybackState.packets[i].data);
-    free(DemoPlaybackState.packets);
-    DemoPlaybackState.packets       = NULL;
-    DemoPlaybackState.packet_count  = 0;
-    DemoPlaybackState.packet_capacity = 0;
+    if (DemoPlaybackState.packets) {
+        for (int i = 0; i < DemoPlaybackState.packet_count; i++)
+            free(DemoPlaybackState.packets[i].data);
+        free(DemoPlaybackState.packets);
+        DemoPlaybackState.packets       = NULL;
+        DemoPlaybackState.packet_count  = 0;
+        DemoPlaybackState.packet_capacity = 0;
+    }
+    if (DemoPlaybackState.maps) {
+        for (int i = 0; i < DemoPlaybackState.map_count; i++)
+            free(DemoPlaybackState.maps[i].data);
+        free(DemoPlaybackState.maps);
+        DemoPlaybackState.maps         = NULL;
+        DemoPlaybackState.map_count    = 0;
+        DemoPlaybackState.map_capacity = 0;
+    }
 }
 
 /* Dispatch a single pre-loaded packet through the existing handler table. */
@@ -328,8 +346,6 @@ bool demo_playback_open(const char* filename) {
     DemoPlaybackState.speed                = 1.0f;
     DemoPlaybackState.current_packet_index = 0;
     DemoPlaybackState.last_real_time       = window_time();
-    DemoPlaybackState.initial_map_data     = NULL;
-    DemoPlaybackState.initial_map_size     = 0;
 
     /* Signal to the game that we are "connected" and loading a map.
        The packet handlers (MapStart, MapChunk, StateData) will drive
@@ -347,13 +363,9 @@ bool demo_playback_open(const char* filename) {
 
 void demo_playback_close(void) {
     free_packets();
-    if (DemoPlaybackState.initial_map_data) {
-        free(DemoPlaybackState.initial_map_data);
-        DemoPlaybackState.initial_map_data = NULL;
-        DemoPlaybackState.initial_map_size  = 0;
-    }
     memset(&DemoPlaybackState, 0, sizeof(DemoPlaybackState));
     demo_seeking = false;
+    demo_muting  = false;
     /* Reset the game clock so a demo that ended while frozen doesn't leave a
        permanent offset on game_time() for whatever runs next. */
     g_paused_total = 0.0;
@@ -399,24 +411,71 @@ void demo_playback_update(void) {
 /* ── Initial-map snapshot ─────────────────────────────────────────── *
  *  Called by read_PacketStateData() after the VXL is decompressed,    *
  *  but only on the first map load (not during seeking).               */
+/* ── Map snapshots ────────────────────────────────────────────────── *
+ *  Called by read_PacketStateData() after the VXL is decompressed, on    *
+ *  every map load (not during seeking).  Each snapshot records the map    *
+ *  bytes plus the time and packet index at which it became active, so a   *
+ *  backward seek can restore the right map and replay from there.         */
 void demo_playback_save_initial_map(const void* data, size_t size) {
-    if (!DemoPlaybackState.active || DemoPlaybackState.initial_map_data)
-        return; /* only save once */
-    DemoPlaybackState.initial_map_data = malloc(size);
-    if (!DemoPlaybackState.initial_map_data) return;
-    memcpy(DemoPlaybackState.initial_map_data, data, size);
-    DemoPlaybackState.initial_map_size = size;
-    log_info("Demo: saved initial map snapshot (%zu bytes)", size);
+    if (!DemoPlaybackState.active || demo_seeking)
+        return; /* don't snapshot during backward replay */
+
+    /* Skip a duplicate snapshot for the StateData we're currently dispatching
+       (current_packet_index points at it during normal forward play). */
+    int pkt = DemoPlaybackState.current_packet_index;
+    if (DemoPlaybackState.map_count > 0 &&
+        DemoPlaybackState.maps[DemoPlaybackState.map_count - 1].packet_index == pkt)
+        return;
+
+    if (DemoPlaybackState.map_count == DemoPlaybackState.map_capacity) {
+        int cap = DemoPlaybackState.map_capacity ? DemoPlaybackState.map_capacity * 2 : 4;
+        struct DemoMapSnapshot* tmp =
+            realloc(DemoPlaybackState.maps, (size_t)cap * sizeof(*tmp));
+        if (!tmp) return;
+        DemoPlaybackState.maps = tmp;
+        DemoPlaybackState.map_capacity = cap;
+    }
+
+    void* copy = malloc(size);
+    if (!copy) return;
+    memcpy(copy, data, size);
+
+    struct DemoMapSnapshot* m = &DemoPlaybackState.maps[DemoPlaybackState.map_count++];
+    m->timestamp    = DemoPlaybackState.current_time;
+    m->packet_index = pkt;
+    m->data         = copy;
+    m->size         = size;
+    log_info("Demo: saved map snapshot #%d (%zu bytes, t=%.1fs)",
+             DemoPlaybackState.map_count - 1, size, m->timestamp);
+}
+
+/* Returns the latest snapshot active at or before `time`, or NULL. */
+static struct DemoMapSnapshot* demo_map_for_time(float time) {
+    struct DemoMapSnapshot* best = NULL;
+    for (int i = 0; i < DemoPlaybackState.map_count; i++) {
+        if (DemoPlaybackState.maps[i].timestamp <= time)
+            best = &DemoPlaybackState.maps[i];
+        else
+            break;
+    }
+    /* Fall back to the first map for very early seeks (before its tiny but
+       positive StateData timestamp). */
+    if (!best && DemoPlaybackState.map_count > 0)
+        best = &DemoPlaybackState.maps[0];
+    return best;
 }
 
 /* ── World reset (for backward seeks) ─────────────────────────────── *
  *  Restores the map and player table to their initial state so that    *
  *  the fast-replay pass builds a consistent world from t=0.           */
-static void demo_reset_world(void) {
-    if (!DemoPlaybackState.initial_map_data) return;
+/* Restores the map active at `time` and resets the player table.  Returns the
+   packet index of that map's StateData, so the caller can replay from there
+   instead of from t=0.  Returns 0 if no snapshot exists. */
+static int demo_reset_world(float time) {
+    struct DemoMapSnapshot* m = demo_map_for_time(time);
+    if (!m) return 0;
 
-    map_vxl_load(DemoPlaybackState.initial_map_data,
-                 DemoPlaybackState.initial_map_size);
+    map_vxl_load(m->data, m->size);
     chunk_rebuild_all();
     player_init();
 
@@ -428,6 +487,7 @@ static void demo_reset_world(void) {
 
     network_logged_in    = 0;
     network_map_transfer = 0;
+    return m->packet_index;
 }
 
 /* ── Fast replay (silent pass used by backward seeks) ─────────────── *
@@ -438,14 +498,15 @@ static void demo_reset_world(void) {
  *                                                                      *
  *  MapStart and MapChunk are skipped because demo_reset_world() has    *
  *  already restored the map from the saved snapshot.                   */
-static void demo_fast_replay_to(float target_time) {
+static void demo_fast_replay_to(int from_index, float target_time) {
     demo_seeking = true;
+    demo_muting  = true;
 
-    for (int i = 0; i < DemoPlaybackState.packet_count; i++) {
+    for (int i = from_index; i < DemoPlaybackState.packet_count; i++) {
         struct DemoPacketEntry* e = &DemoPlaybackState.packets[i];
         if (e->timestamp > target_time) break;
 
-        /* Skip map-loading packets — map was pre-loaded in demo_reset_world() */
+        /* Skip map-loading packets — map was restored in demo_reset_world() */
         unsigned char id = e->data[0];
         if (id == PACKET_MAPSTART_ID || id == PACKET_MAPCHUNK_ID) continue;
 
@@ -454,6 +515,7 @@ static void demo_fast_replay_to(float target_time) {
     }
 
     demo_seeking = false;
+    demo_muting  = false;
 }
 
 /* ── Seek ─────────────────────────────────────────────────────────── *
@@ -471,25 +533,26 @@ void demo_playback_seek(float time) {
 
     bool backward = time < DemoPlaybackState.current_time;
 
-    if (backward && DemoPlaybackState.initial_map_data) {
+    if (backward) {
         float replay_time = (time < DemoPlaybackState.bootstrap_end_time)
                           ? DemoPlaybackState.bootstrap_end_time : time;
-        demo_reset_world();              /* reloads map + clears chat */
-        demo_fast_replay_to(replay_time);
+        int from = demo_reset_world(time); /* restores the map active at `time` */
+        demo_fast_replay_to(from, replay_time);
     } else if (!backward) {
-        /* Forward: dispatch the in-between packets silently, starting from
-           the current cursor.  Map packets are skipped (map already loaded). */
-        demo_seeking = true;
-        for (int i = DemoPlaybackState.current_packet_index;
-             i < DemoPlaybackState.packet_count; i++) {
-            struct DemoPacketEntry* e = &DemoPlaybackState.packets[i];
+        /* Forward: fast-dispatch the in-between packets exactly as
+           demo_playback_update would, just with effects muted.  Map packets
+           are NOT skipped here — the world is live, so an in-progress load or
+           a mid-demo map change must apply normally. */
+        demo_muting = true;
+        while (DemoPlaybackState.current_packet_index <
+               DemoPlaybackState.packet_count) {
+            struct DemoPacketEntry* e =
+                &DemoPlaybackState.packets[DemoPlaybackState.current_packet_index];
             if (e->timestamp > time) break;
-            unsigned char id = e->data[0];
-            if (id == PACKET_MAPSTART_ID || id == PACKET_MAPCHUNK_ID) continue;
-            if (packets[id])
-                (*packets[id])(e->data + 1, (int)(e->length - 1));
+            dispatch_packet(e);
+            DemoPlaybackState.current_packet_index++;
         }
-        demo_seeking = false;
+        demo_muting = false;
     }
 
     DemoPlaybackState.current_time = time;
