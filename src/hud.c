@@ -4059,11 +4059,17 @@ static void hud_controls_init() {
 int demo_list_files(char*** out);
 static char** demo_files = NULL;
 static int    demo_file_count = 0;
+
+static int demo_delete_index = -1;
+static int demo_rename_index = -1;
+static char demo_rename_buf[256];
+
 static void hud_demolist_init(void) {
 	if(!hud_demolist.ctx) hud_demolist.ctx = malloc(sizeof(mu_Context));
 	if(demo_files) { for(int i = 0; i < demo_file_count; i++) free(demo_files[i]); free(demo_files); demo_files = NULL; }
 	demo_file_count = demo_list_files(&demo_files);
 }
+
 static void hud_demolist_render(mu_Context* ctx, float scalex, float scaley) {
 	hud_common_render(ctx);
 	mu_Rect frame = mu_rect(settings.window_width/2.F - fminf(1024.F,settings.window_width*0.75F)/2.F, 0,
@@ -4082,14 +4088,26 @@ static void hud_demolist_render(mu_Context* ctx, float scalex, float scaley) {
 		for(int i = 0; i < demo_file_count; i++) {
 			const char* slash = strrchr(demo_files[i], '/');
 			const char* name = slash ? slash+1 : demo_files[i];
-			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 			mu_push_id(ctx, &i, sizeof(i));
+			int bw = ctx->text_width(ctx->style->font, "Delete", 0) * 1.6F;
+			int sp = ctx->style->spacing;
+			mu_layout_row(ctx, 3, (int[]) {-(bw * 2 + sp * 3 + 1), bw, bw}, 0);
 			if(mu_button_ex(ctx, name, 0, MU_OPT_NOFRAME)) {
 				if(demo_playback_open(demo_files[i])) {
 					hud_change(&hud_ingame);
 					camera_mode = CAMERAMODE_SPECTATOR;
 					cameracontroller_reset_spectator_velocity();
 				}
+			}
+			if(mu_button_ex(ctx, "Delete", 0, MU_OPT_NOFRAME)) {
+				demo_delete_index = i;
+			}
+			if(mu_button_ex(ctx, "Rename", 0, MU_OPT_NOFRAME)) {
+				demo_rename_index = i;
+				const char* slash2 = strrchr(demo_files[i], '/');
+				const char* base = slash2 ? slash2+1 : demo_files[i];
+				strncpy(demo_rename_buf, base, sizeof(demo_rename_buf) - 1);
+				demo_rename_buf[sizeof(demo_rename_buf) - 1] = 0;
 			}
 			mu_pop_id(ctx);
 		}
@@ -4099,6 +4117,69 @@ static void hud_demolist_render(mu_Context* ctx, float scalex, float scaley) {
 				0, MU_OPT_NOFRAME|MU_OPT_ALIGNCENTER|MU_OPT_NOINTERACT);
 		}
 		mu_end_panel(ctx); mu_end_window(ctx);
+	}
+
+	/* --- Delete confirm dialog --- */
+	if(demo_delete_index >= 0 && demo_delete_index < demo_file_count) {
+		if(mu_begin_window_ex(ctx, "Confirm Delete", mu_rect(0, 0, 320, 130),
+			 MU_OPT_HOLDFOCUS | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
+			mu_Container* cnt = mu_get_current_container(ctx);
+			mu_bring_to_front(ctx, cnt);
+			cnt->rect = mu_rect((settings.window_width - 320) / 2, 280, 320, 130);
+			mu_layout_row(ctx, 1, (int[]) {-1}, -ctx->text_height(ctx->style->font) * 1.5F);
+			mu_text(ctx, "Are you sure you want to delete this demo?");
+			int bw = ctx->text_width(ctx->style->font, "Yes", 0) * 1.6F;
+			mu_layout_row(ctx, 2, (int[]) {-bw, -1}, 0);
+			if(mu_button(ctx, "Yes")) {
+				remove(demo_files[demo_delete_index]);
+				demo_delete_index = -1;
+				hud_demolist_init();
+			}
+			if(mu_button(ctx, "No")) {
+				demo_delete_index = -1;
+			}
+			mu_end_window(ctx);
+		}
+	}
+
+	/* --- Rename dialog --- */
+	if(demo_rename_index >= 0 && demo_rename_index < demo_file_count) {
+		if(mu_begin_window_ex(ctx, "Rename Demo", mu_rect(0, 0, 400, 130),
+			 MU_OPT_HOLDFOCUS | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
+			mu_Container* cnt = mu_get_current_container(ctx);
+			mu_bring_to_front(ctx, cnt);
+			cnt->rect = mu_rect((settings.window_width - 400) / 2, 280, 400, 130);
+			mu_layout_row(ctx, 1, (int[]) {-1}, -ctx->text_height(ctx->style->font) * 1.5F);
+			mu_text(ctx, "Enter new name for the demo file:");
+			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+			int res = mu_textbox(ctx, demo_rename_buf, sizeof(demo_rename_buf));
+			int bw = ctx->text_width(ctx->style->font, "Rename", 0) * 1.6F;
+			mu_layout_row(ctx, 2, (int[]) {-bw, -1}, 0);
+			if(mu_button(ctx, "Rename") || (res & MU_RES_SUBMIT)) {
+				const char* slash = strrchr(demo_files[demo_rename_index], '/');
+				char new_path[512];
+				if(slash) {
+					int dir_len = slash - demo_files[demo_rename_index];
+					memcpy(new_path, demo_files[demo_rename_index], dir_len);
+					new_path[dir_len] = '/';
+					new_path[dir_len + 1] = 0;
+				} else {
+					new_path[0] = 0;
+				}
+				char* ext = strrchr(demo_rename_buf, '.');
+				if(!ext || strcmp(ext, ".demo") != 0) {
+					strncat(demo_rename_buf, ".demo", sizeof(demo_rename_buf) - strlen(demo_rename_buf) - 1);
+				}
+				strncat(new_path, demo_rename_buf, sizeof(new_path) - strlen(new_path) - 1);
+				rename(demo_files[demo_rename_index], new_path);
+				demo_rename_index = -1;
+				hud_demolist_init();
+			}
+			if(mu_button(ctx, "Cancel")) {
+				demo_rename_index = -1;
+			}
+			mu_end_window(ctx);
+		}
 	}
 }
 static void hud_demolist_keyboard(int key, int action, int mods, int internal) {
