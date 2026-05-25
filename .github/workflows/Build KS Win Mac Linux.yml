@@ -13,9 +13,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux
           - os: macos-13
-            platform: macos-intel
-          - os: macos-latest
-            platform: macos-arm
+            platform: macos
 
     steps:
       - name: Checkout your fork
@@ -27,6 +25,13 @@ jobs:
           git fetch upstream
           git merge upstream/main --no-edit || true
         shell: bash
+
+      - name: Cache CMake dependencies
+        if: matrix.platform != 'windows'
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('src/CMakeLists.txt') }}
 
       # --- WINDOWS ONLY BUILD STEPS ---
       - name: Install MSYS2 (Windows)
@@ -100,83 +105,39 @@ jobs:
           cd build
           zip -r "KyroSpades Linux.zip" KyroSpades/
 
-      # --- MACOS BUILD STEPS (both Intel and ARM) ---
+      # --- MACOS ONLY BUILD STEPS ---
       - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos-intel' || matrix.platform == 'macos-arm'
+        if: matrix.platform == 'macos'
         run: |
           brew install cmake sdl2 glew openal-soft enet libdeflate
 
       - name: Build (macOS)
-        if: matrix.platform == 'macos-intel' || matrix.platform == 'macos-arm'
+        if: matrix.platform == 'macos'
         run: |
           mkdir -p build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix openal-soft)" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
           make -j$(sysctl -n hw.logicalcpu)
 
-      # --- UPLOAD ARTIFACTS PER PLATFORM ---
-      - name: Upload zip artifact (Windows)
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: build/KyroSpades-win64.zip
-
-      - name: Upload zip artifact (Linux)
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: build/KyroSpades Linux.zip
-
-      - name: Upload raw build directory (macOS Intel)
-        if: matrix.platform == 'macos-intel'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-intel-raw
-          path: build/KyroSpades/
-
-      - name: Upload raw build directory (macOS ARM)
-        if: matrix.platform == 'macos-arm'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm-raw
-          path: build/KyroSpades/
-
-  package-macos:
-    name: Package Universal macOS Build
-    needs: build
-    runs-on: macos-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-intel-raw
-          path: macos-intel
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-arm-raw
-          path: macos-arm
-
-      - name: Create universal binary and zip
+      - name: Zip release (macOS)
+        if: matrix.platform == 'macos'
         run: |
-          mkdir -p KyroSpades
-          cp -r macos-arm/* KyroSpades/
-          lipo -create \
-            macos-intel/client \
-            macos-arm/client \
-            -output KyroSpades/client
-          chmod +x KyroSpades/client
+          cd build
           zip -r "KyroSpades MacOS.zip" KyroSpades/
 
-      - uses: actions/upload-artifact@v4
+      # --- UPLOAD ARTIFACTS ---
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: macos-build
-          path: KyroSpades MacOS.zip
+          name: ${{ matrix.platform }}-build
+          path: |
+            build/KyroSpades-win64.zip
+            build/KyroSpades Linux.zip
+            build/KyroSpades MacOS.zip
 
   release:
     name: Create GitHub Release
-    needs: [build, package-macos]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -195,7 +156,7 @@ jobs:
       - name: Upload as GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: Release
+          tag_name: build-${{ steps.date.outputs.date }}
           name: Latest Windows, Linux and macOS Build
           files: |
             release-artifacts/KyroSpades-win64.zip
