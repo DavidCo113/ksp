@@ -164,6 +164,21 @@ jobs:
             cmake --install libdeflate-build
           fi
 
+      - name: Apply macOS fixes
+        if: matrix.platform == 'macos'
+        run: |
+          # macOS lacks pthread_spinlock_t; replace with pthread_mutex_t
+          sed -i 's/pthread_spinlock_t/pthread_mutex_t/g' src/chunk.c
+          sed -i 's/pthread_spin_init(\&chunk_block_queue_lock, PTHREAD_PROCESS_PRIVATE)/pthread_mutex_init(\&chunk_block_queue_lock, NULL)/' src/chunk.c
+          sed -i 's/pthread_spin_lock/pthread_mutex_lock/g' src/chunk.c
+          sed -i 's/pthread_spin_unlock/pthread_mutex_unlock/g' src/chunk.c
+          # Fix abs() on float values in camera.c
+          sed -i 's/int xr = abs(errx)/int xr = (int)fabsf(errx)/' src/camera.c
+          sed -i 's/int yr = abs(erry)/int yr = (int)fabsf(erry)/' src/camera.c
+          sed -i 's/int zr = abs(errz)/int zr = (int)fabsf(errz)/' src/camera.c
+          # Guard GLEW_STATIC to avoid redefinition warning
+          sed -i 's/#define GLEW_STATIC/#ifndef GLEW_STATIC\n#define GLEW_STATIC\n#endif/' src/common.h
+
       - name: Build (macOS)
         if: matrix.platform == 'macos'
         env:
