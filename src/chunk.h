@@ -50,6 +50,7 @@ void* chunk_generate(void* data);
 void chunk_generate_greedy(struct libvxl_chunk_copy* blocks, size_t start_x, size_t start_z, struct tesselator* tess,
 						   int* max_height);
 void chunk_generate_naive(struct libvxl_chunk_copy* blocks, struct tesselator* tess, int* max_height, int ao);
+void chunk_generate_textured(struct libvxl_chunk_copy* blocks, struct tesselator* tess, int* max_height);
 void chunk_rebuild_all(void);
 void chunk_draw_visible(void);
 void chunk_queue_blocks();

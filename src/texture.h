@@ -34,6 +34,7 @@ extern struct texture texture_dummy;
 
 extern struct texture texture_health;
 extern struct texture texture_block;
+extern struct texture texture_blocks;
 extern struct texture texture_grenade;
 extern struct texture texture_ammo_semi;
 extern struct texture texture_ammo_smg;

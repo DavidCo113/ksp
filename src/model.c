@@ -556,10 +556,10 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 			}
 
 			glx_displaylist_update(kv6->display_list + 0, cnt[0], GLX_DISPLAYLIST_POINTS, colors[0], vertices[0],
-								   normals[0]);
+								   normals[0], NULL);
 
 			glx_displaylist_update(kv6->display_list + 1, cnt[1], GLX_DISPLAYLIST_POINTS, colors[1], vertices[1],
-								   normals[1]);
+								   normals[1], NULL);
 
 			if(kv6_program < 0) {
 				kv6_program

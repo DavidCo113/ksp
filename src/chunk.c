@@ -190,7 +190,9 @@ void* chunk_generate(void* data) {
 		struct libvxl_chunk_copy blocks;
 		map_copy_blocks(&blocks, work.chunk_x * CHUNK_SIZE, work.chunk_y * CHUNK_SIZE);
 
-		if(settings.greedy_meshing)
+		if(settings.textured_blocks) {
+			chunk_generate_textured(&blocks, &result.tesselator, &result.max_height);
+		} else if(settings.greedy_meshing)
 			chunk_generate_greedy(&blocks, work.chunk_x * CHUNK_SIZE, work.chunk_y * CHUNK_SIZE, &result.tesselator,
 								  &result.max_height);
 		else
@@ -761,6 +763,99 @@ void chunk_generate_naive(struct libvxl_chunk_copy* blocks, struct tesselator* t
 			} else {
 				tesselator_set_color(tess, rgba(r * 0.5F, g * 0.5F, b * 0.5F, 255));
 				tesselator_addi_cube_face(tess, CUBE_FACE_Y_N, x, y, z);
+			}
+		}
+	}
+
+	(*max_height)++;
+}
+
+static void emit_textured_face(struct tesselator* tess, enum tesselator_cube_face face,
+                                int16_t x, int16_t y, int16_t z,
+                                float u0, float v0, float u1, float v1) {
+	switch(face) {
+		case CUBE_FACE_Z_N:
+			tesselator_addi_uv(tess, (int16_t[]){x, y, z, x, y+1, z, x+1, y+1, z, x+1, y, z},
+							   (float[]){u0, v1, u0, v0, u1, v0, u1, v1});
+			break;
+		case CUBE_FACE_Z_P:
+			tesselator_addi_uv(tess, (int16_t[]){x, y, z+1, x+1, y, z+1, x+1, y+1, z+1, x, y+1, z+1},
+							   (float[]){u0, v1, u1, v1, u1, v0, u0, v0});
+			break;
+		case CUBE_FACE_X_N:
+			tesselator_addi_uv(tess, (int16_t[]){x, y, z, x, y, z+1, x, y+1, z+1, x, y+1, z},
+							   (float[]){u0, v1, u1, v1, u1, v0, u0, v0});
+			break;
+		case CUBE_FACE_X_P:
+			tesselator_addi_uv(tess, (int16_t[]){x+1, y, z, x+1, y+1, z, x+1, y+1, z+1, x+1, y, z+1},
+							   (float[]){u0, v1, u0, v0, u1, v0, u1, v1});
+			break;
+		case CUBE_FACE_Y_P:
+			tesselator_addi_uv(tess, (int16_t[]){x, y+1, z, x, y+1, z+1, x+1, y+1, z+1, x+1, y+1, z},
+							   (float[]){u0, v0, u0, v1, u1, v1, u1, v0});
+			break;
+		case CUBE_FACE_Y_N:
+			tesselator_addi_uv(tess, (int16_t[]){x, y, z, x+1, y, z, x+1, y, z+1, x, y, z+1},
+							   (float[]){u0, v0, u1, v0, u1, v1, u0, v1});
+			break;
+	}
+}
+
+void chunk_generate_textured(struct libvxl_chunk_copy* blocks, struct tesselator* tess, int* max_height) {
+	*max_height = 0;
+
+	for(size_t k = 0; k < blocks->blocks_sorted_count; k++) {
+		struct libvxl_block* blk = blocks->blocks_sorted + k;
+
+		int x = key_getx(blk->position);
+		int y = map_size_y - 1 - key_getz(blk->position);
+		int z = key_gety(blk->position);
+
+		*max_height = max(*max_height, y);
+
+		uint32_t col = blk->color;
+		int r = blue(col);
+		int g = green(col);
+		int b = red(col);
+
+		{
+			int tile_x = (r / 64) + ((b / 64 == 1 || b / 64 == 3) ? 4 : 0);
+			int tile_y = (g / 64) + ((b / 64 == 2 || b / 64 == 3) ? 4 : 0);
+			tile_x = min(tile_x, 7);
+			tile_y = min(tile_y, 7);
+			float u0 = tile_x / 8.0f;
+			float v0 = tile_y / 8.0f;
+			float u1 = (tile_x + 1) / 8.0f;
+			float v1 = (tile_y + 1) / 8.0f;
+
+			if(solid_array_isair(blocks, x, y, z - 1)) {
+				tesselator_set_color(tess, rgba(r * 0.875F, g * 0.875F, b * 0.875F, 255));
+				emit_textured_face(tess, CUBE_FACE_Z_N, x, y, z, u0, v0, u1, v1);
+			}
+
+			if(solid_array_isair(blocks, x, y, z + 1)) {
+				tesselator_set_color(tess, rgba(r * 0.625F, g * 0.625F, b * 0.625F, 255));
+				emit_textured_face(tess, CUBE_FACE_Z_P, x, y, z, u0, v0, u1, v1);
+			}
+
+			if(solid_array_isair(blocks, x - 1, y, z)) {
+				tesselator_set_color(tess, rgba(r * 0.75F, g * 0.75F, b * 0.75F, 255));
+				emit_textured_face(tess, CUBE_FACE_X_N, x, y, z, u0, v0, u1, v1);
+			}
+
+			if(solid_array_isair(blocks, x + 1, y, z)) {
+				tesselator_set_color(tess, rgba(r * 0.75F, g * 0.75F, b * 0.75F, 255));
+				emit_textured_face(tess, CUBE_FACE_X_P, x, y, z, u0, v0, u1, v1);
+			}
+
+			if(y == map_size_y - 1 || solid_array_isair(blocks, x, y + 1, z)) {
+				tesselator_set_color(tess, rgba(r, g, b, 255));
+				emit_textured_face(tess, CUBE_FACE_Y_P, x, y, z, u0, v0, u1, v1);
+			}
+
+			if(y > 0 && solid_array_isair(blocks, x, y - 1, z)) {
+				tesselator_set_color(tess, rgba(r * 0.5F, g * 0.5F, b * 0.5F, 255));
+				emit_textured_face(tess, CUBE_FACE_Y_N, x, y, z, u0, v0, u1, v1);
 			}
 		}
 	}

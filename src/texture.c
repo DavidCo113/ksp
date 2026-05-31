@@ -40,6 +40,7 @@ struct texture texture_dummy;
 
 struct texture texture_health;
 struct texture texture_block;
+struct texture texture_blocks;
 struct texture texture_grenade;
 struct texture texture_ammo_semi;
 struct texture texture_ammo_smg;
@@ -412,6 +413,11 @@ void texture_init() {
 
 	texture_create(&texture_health, "png/health.png");
 	texture_create(&texture_block, "png/block.png");
+	texture_create(&texture_blocks, "png/multimapblock.png");
+	glBindTexture(GL_TEXTURE_2D, texture_blocks.texture_id);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
 	texture_create(&texture_grenade, "png/grenade.png");
 	texture_create(&texture_ammo_semi, "png/semiammo.png");
 	texture_create(&texture_ammo_smg, "png/smgammo.png");

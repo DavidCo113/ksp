@@ -164,8 +164,19 @@ void drawScene() {
 		glShadeModel(GL_FLAT);
 	}
 
+	if(settings.textured_blocks) {
+		glEnable(GL_TEXTURE_2D);
+		glBindTexture(GL_TEXTURE_2D, texture_blocks.texture_id);
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	}
+
 	matrix_upload();
 	chunk_draw_visible();
+
+	if(settings.textured_blocks) {
+		glDisable(GL_TEXTURE_2D);
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	}
 
 	if(settings.smooth_fog) {
 #ifdef OPENGL_ES
@@ -1055,6 +1066,9 @@ int main(int argc, char** argv) {
 	settings.shotgun_ads_fov = CAMERA_DEFAULT_FOV;
 	settings.smg_ads_fov = CAMERA_DEFAULT_FOV;
 	settings.disable_dynamic_fov = 0;
+	settings.textured_blocks = 0;
+	settings.chat_mention_r = 255;
+	settings.chat_mention_g = 255;
 	strcpy(settings.name, "DEV_CLIENT");
 
 #ifdef USE_TOUCH

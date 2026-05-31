@@ -39,6 +39,7 @@ struct tesselator {
 	void* vertices;
 	int8_t* normals;
 	uint32_t* colors;
+	float* texcoords;
 	uint32_t quad_count;
 	uint32_t quad_space;
 	int has_normal;
@@ -67,6 +68,7 @@ void tesselator_addi(struct tesselator* t, int16_t* coords, uint32_t* colors, in
 void tesselator_addf(struct tesselator* t, float* coords, uint32_t* colors, int8_t* normals);
 void tesselator_addi_simple(struct tesselator* t, int16_t* coords);
 void tesselator_addf_simple(struct tesselator* t, float* coords);
+void tesselator_addi_uv(struct tesselator* t, int16_t* coords, float* uvs);
 void tesselator_addi_cube_face(struct tesselator* t, enum tesselator_cube_face face, int16_t x, int16_t y, int16_t z);
 void tesselator_addi_cube_face_adv(struct tesselator* t, enum tesselator_cube_face face, int16_t x, int16_t y,
 								   int16_t z, int16_t sx, int16_t sy, int16_t sz);

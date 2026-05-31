@@ -3176,6 +3176,11 @@ static struct serverlist_news_entry {
 static int serverlist_news_exists = 0;
 static char serverlist_input[128];
 
+static void pinned_load();
+static void pinned_save();
+static int pinned_contains(const char* identifier);
+static void pinned_toggle(const char* identifier);
+
 static void hud_serverlist_init() {
 	ping_stop();
 	network_disconnect();
@@ -3206,12 +3211,24 @@ static void hud_serverlist_init() {
 	memcpy(serverlist_input, settings.last_address, sizeof settings.last_address);
 
 	pthread_mutex_init(&serverlist_lock, NULL);
+	pinned_load();
 	window_textinput(1);
+}
+
+static int compare_pinned(const void* a, const void* b) {
+	struct serverlist_entry* aa = (struct serverlist_entry*)a;
+	struct serverlist_entry* bb = (struct serverlist_entry*)b;
+	if(aa->pinned && !bb->pinned) return -1;
+	if(!aa->pinned && bb->pinned) return 1;
+	return 0;
 }
 
 static int hud_serverlist_sort(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
+
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
 
 	if(strcmp(aa->country, "LAN") == 0) {
 		return -1;
@@ -3233,12 +3250,18 @@ static int hud_serverlist_sort_players(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
 
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
+
 	return bb->current - aa->current;
 }
 
 static int hud_serverlist_sort_name(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
+
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
 
 	return strcmp(aa->name, bb->name);
 }
@@ -3247,6 +3270,9 @@ static int hud_serverlist_sort_map(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
 
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
+
 	return strcmp(aa->map, bb->map);
 }
 
@@ -3254,12 +3280,18 @@ static int hud_serverlist_sort_mode(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
 
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
+
 	return strcmp(aa->gamemode, bb->gamemode);
 }
 
 static int hud_serverlist_sort_ping(const void* a, const void* b) {
 	struct serverlist_entry* aa = (struct serverlist_entry*)a;
 	struct serverlist_entry* bb = (struct serverlist_entry*)b;
+
+	int cp = compare_pinned(a, b);
+	if(cp) return cp;
 
 	return aa->ping - bb->ping;
 }
@@ -3279,6 +3311,61 @@ static void hud_serverlist_pingupdate(void* e, float time_delta, char* aos) {
 
 	qsort(serverlist, server_count, sizeof(struct serverlist_entry), hud_serverlist_sort);
 	pthread_mutex_unlock(&serverlist_lock);
+}
+
+#define MAX_PINNED 128
+static char pinned_identifiers[MAX_PINNED][32];
+static int pinned_count = 0;
+
+static void pinned_load() {
+	if(!file_exists("pinned_servers.txt")) return;
+	int sz = file_size("pinned_servers.txt");
+	if(sz <= 0) return;
+	char* data = file_load("pinned_servers.txt");
+	if(!data) return;
+	pinned_count = 0;
+	char* p = data;
+	char* end = data + sz;
+	while(p < end && pinned_count < MAX_PINNED) {
+		char* nl = strchr(p, '\n');
+		int len = nl ? (nl - p) : (end - p);
+		if(len > 0 && len < (int)sizeof(pinned_identifiers[0])) {
+			memcpy(pinned_identifiers[pinned_count], p, len);
+			pinned_identifiers[pinned_count][len] = 0;
+			pinned_count++;
+		}
+		p = nl ? nl + 1 : end;
+	}
+	free(data);
+}
+
+static void pinned_save() {
+	void* f = file_open("pinned_servers.txt", "w");
+	if(!f) return;
+	for(int k = 0; k < pinned_count; k++)
+		file_printf(f, "%s\n", pinned_identifiers[k]);
+	file_close(f);
+}
+
+static int pinned_contains(const char* identifier) {
+	for(int k = 0; k < pinned_count; k++)
+		if(!strcmp(pinned_identifiers[k], identifier)) return 1;
+	return 0;
+}
+
+static void pinned_toggle(const char* identifier) {
+	int idx = -1;
+	for(int k = 0; k < pinned_count; k++)
+		if(!strcmp(pinned_identifiers[k], identifier)) { idx = k; break; }
+	if(idx >= 0) {
+		memmove(&pinned_identifiers[idx], &pinned_identifiers[idx + 1],
+				(pinned_count - idx - 1) * sizeof(pinned_identifiers[0]));
+		pinned_count--;
+	} else if(pinned_count < MAX_PINNED) {
+		strncpy(pinned_identifiers[pinned_count], identifier, sizeof(pinned_identifiers[0]) - 1);
+		pinned_count++;
+	}
+	pinned_save();
 }
 
 static void server_c(char* address, char* name) {
@@ -3518,6 +3605,7 @@ static void hud_serverlist_render(mu_Context* ctx, float scalex, float scaley) {
 		pthread_mutex_lock(&serverlist_lock);
 		if(server_count > 0) {
 			char total_str[128];
+			int serverlist_need_sort = 0;
 			for(int k = 0; k < server_count; k++) {
 				if(serverlist[k].current >= 0)
 					sprintf(total_str, "%i/%i", serverlist[k].current, serverlist[k].max);
@@ -3531,7 +3619,10 @@ static void hud_serverlist_render(mu_Context* ctx, float scalex, float scaley) {
 
 				mu_push_id(ctx, &serverlist[k].identifier, strlen(serverlist[k].identifier));
 
-				mu_text_color(ctx, 230 / f, 230 / f, 230 / f);
+				if(serverlist[k].pinned)
+					mu_text_color(ctx, 255 / f, 220 / f, 0);
+				else
+					mu_text_color(ctx, 230 / f, 230 / f, 230 / f);
 				bool join = false;
 				if(mu_button_ex(ctx, total_str, 0, MU_OPT_NOFRAME | MU_OPT_ALIGNCENTER))
 					join = true;
@@ -3559,6 +3650,22 @@ static void hud_serverlist_render(mu_Context* ctx, float scalex, float scaley) {
 								MU_OPT_NOFRAME | MU_OPT_ALIGNCENTER))
 					join = true;
 
+				if(serverlist[k].pinned) {
+					mu_Container* cnt = mu_get_current_container(ctx);
+					mu_draw_rect(ctx, mu_rect(cnt->body.x, ctx->last_rect.y, cnt->body.w, ctx->last_rect.h),
+								 mu_color(255, 220, 0, 20));
+				}
+
+				if(ctx->mouse_pressed & MU_MOUSE_RIGHT) {
+					mu_Container* cnt = mu_get_current_container(ctx);
+					mu_Rect row_rect = mu_rect(cnt->body.x, ctx->last_rect.y, cnt->body.w, ctx->last_rect.h);
+					if(mu_mouse_over(ctx, row_rect)) {
+						pinned_toggle(serverlist[k].identifier);
+						serverlist[k].pinned = !serverlist[k].pinned;
+						serverlist_need_sort = 1;
+					}
+				}
+
 				mu_pop_id(ctx);
 
 				if(join) {
@@ -3566,6 +3673,8 @@ static void hud_serverlist_render(mu_Context* ctx, float scalex, float scaley) {
 					break;
 				}
 			}
+			if(serverlist_need_sort)
+				qsort(serverlist, server_count, sizeof(struct serverlist_entry), hud_serverlist_sort);
 		} else {
 			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 			mu_button_ex(ctx, "Fetching servers...", 0, MU_OPT_NOFRAME | MU_OPT_ALIGNCENTER);
@@ -3694,6 +3803,9 @@ static void hud_serverlist_render(mu_Context* ctx, float scalex, float scaley) {
 					player_count += serverlist[k].current;
 				}
 
+				for(int k = 0; k < server_count; k++)
+					serverlist[k].pinned = pinned_contains(serverlist[k].identifier);
+
 				qsort(serverlist, server_count, sizeof(struct serverlist_entry), hud_serverlist_sort);
 				pthread_mutex_unlock(&serverlist_lock);
 
@@ -3736,8 +3848,11 @@ struct hud hud_serverlist = {
 
 /*         HUD_SETTINGS START        */
 
+static int selected_category = 0;
+
 static void hud_settings_init() {
 	memcpy(&settings_tmp, &settings, sizeof(struct RENDER_OPTIONS));
+	selected_category = 0;
 }
 
 static int int_slider_defaults(mu_Context* ctx, struct config_setting* setting) {
@@ -3790,10 +3905,92 @@ static struct texture* hud_settings_ui_images(int icon_id, bool* resize) {
 	}
 }
 
+static void render_setting_row(mu_Context* ctx, struct config_setting* a, int width) {
+	mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
+
+	switch(a->type) {
+		case CONFIG_TYPE_STRING:
+			mu_text(ctx, a->name);
+			mu_textbox(ctx, a->value, a->max + 1);
+			break;
+		case CONFIG_TYPE_INT:
+			if(a->max == 1 && a->min == 0) {
+				mu_text(ctx, a->name);
+				mu_checkbox(ctx, "", a->value);
+			} else if(a->defaults_length > 0) {
+				mu_text(ctx, a->name);
+				int_slider_defaults(ctx, a);
+			} else if(a->max == INT_MAX) {
+				mu_text(ctx, a->name);
+				int_number(ctx, a->value);
+			} else {
+				mu_text(ctx, a->name);
+				int_slider(ctx, a->value, a->min, a->max);
+			}
+			break;
+		case CONFIG_TYPE_FLOAT:
+			mu_text(ctx, a->name);
+			if(a->max == INT_MAX) {
+				mu_number(ctx, a->value, 0.1F);
+				*(float*)a->value = max(a->min, *(float*)a->value);
+			} else {
+				mu_slider(ctx, a->value, a->min, a->max);
+			}
+			break;
+	}
+
+	if(*a->help) {
+		mu_push_id(ctx, &a->value, sizeof(a->value));
+
+		mu_Container* help_cnt = mu_get_container(ctx, "Help");
+		if(help_cnt && help_cnt->open) {
+			int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
+			int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
+			help_cnt->rect = mu_rect((settings.window_width - pw) / 2,
+									  (settings.window_height - ph) / 2, pw, ph);
+		}
+
+		int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
+		int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
+		if(mu_begin_window_ex(ctx, "Help",
+							  mu_rect((settings.window_width - pw) / 2,
+									  (settings.window_height - ph) / 2, pw, ph),
+							  MU_OPT_AUTOSIZE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL | MU_OPT_POPUP | MU_OPT_CLOSED)) {
+			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+			mu_text(ctx, a->help);
+			mu_end_window(ctx);
+		}
+		if(mu_button(ctx, "?"))
+			mu_open_popup(ctx, "Help");
+		mu_pop_id(ctx);
+	} else {
+		mu_layout_next(ctx);
+	}
+}
+
+static int setting_in_category(struct config_setting* a, int cat) {
+	switch(cat) {
+		case 0:
+			return strcmp(a->category, "Weapon Settings") != 0
+				&& strcmp(a->category, "Weather") != 0
+				&& strcmp(a->category, "Spectator Mode Settings") != 0
+				&& strcmp(a->category, "Graphic Settings") != 0
+				&& strcmp(a->category, "HUD/UI Settings") != 0
+				&& strcmp(a->category, "Chat Settings") != 0;
+		case 1: return strcmp(a->category, "Weapon Settings") == 0;
+		case 2: return strcmp(a->category, "Weather") == 0;
+		case 3: return strcmp(a->category, "Spectator Mode Settings") == 0;
+		case 4: return strcmp(a->category, "Graphic Settings") == 0;
+		case 5: return strcmp(a->category, "HUD/UI Settings") == 0;
+		case 6: return strcmp(a->category, "Chat Settings") == 0;
+		default: return 0;
+	}
+}
+
 static void hud_settings_render(mu_Context* ctx, float scalex, float scaley) {
 	hud_common_render(ctx);
 
-	mu_Rect frame = mu_rect(settings.window_width / 2.F - fminf(1024.F, settings.window_width * 0.75F) / 2.F, 0, fminf(1024.F, settings.window_width * 0.75F), settings.window_height);
+	mu_Rect frame = mu_rect(0, 0, settings.window_width, settings.window_height);
 
 	if(mu_begin_window_ex(ctx, "Main", frame, MU_OPT_NOFRAME | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
 		mu_Container* cnt = mu_get_current_container(ctx);
@@ -3801,376 +3998,57 @@ static void hud_settings_render(mu_Context* ctx, float scalex, float scaley) {
 
 		hud_common_nav(ctx, &frame, scalex, scaley);
 
-		mu_layout_row(ctx, 1, (int[]) {-1}, -1);
+		mu_layout_row(ctx, 2, (int[]) {150, -1}, -1);
 
-		mu_begin_panel(ctx, "Content");	
+		mu_begin_panel(ctx, "Categories");
+		mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 
-		if(mu_header_ex(ctx, "KyroSpades Settings", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
+		static const char* cat_names[] = {
+			"General",
+			"Weapons",
+			"Weather",
+			"Spectator",
+			"Graphics",
+			"HUD/UI",
+			"Chat",
+			"Help",
+		};
+		int cat_count = sizeof(cat_names) / sizeof(cat_names[0]);
 
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
-
-				if(strcmp(a->category, "KyroSpades Settings") != 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
+		for(int i = 0; i < cat_count; i++) {
+			if(selected_category == i) {
+				mu_Color old_border = ctx->style->colors[MU_COLOR_BORDER];
+				mu_Color old_text = ctx->style->colors[MU_COLOR_TEXT];
+				mu_Color accent = {settings.ui_accent_r, settings.ui_accent_g, settings.ui_accent_b, 255};
+				mu_Color black = {0, 0, 0, 255};
+				ctx->style->colors[MU_COLOR_BORDER] = accent;
+				ctx->style->colors[MU_COLOR_TEXT] = black;
+				mu_button_ex(ctx, cat_names[i], 0, MU_OPT_NOINTERACT);
+				ctx->style->colors[MU_COLOR_TEXT] = old_text;
+				ctx->style->colors[MU_COLOR_BORDER] = old_border;
+			} else {
+				if(mu_button(ctx, cat_names[i]))
+					selected_category = i;
 			}
-
 		}
 
-		if(mu_header_ex(ctx, "Weapon Settings", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
+		mu_end_panel(ctx);
 
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
+		mu_begin_panel(ctx, "Settings");
 
-				if(strcmp(a->category, "Weapon Settings") != 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
-			}
-
-		}
-
-		if(mu_header_ex(ctx, "Weather", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
-
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
-
-				if(strcmp(a->category, "Weather") != 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
-			}
-
-		}
-
-		if(mu_header_ex(ctx, "Spectator Mode Settings", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
-
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
-
-				if(strcmp(a->category, "Spectator Mode Settings") != 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
-			}
-
-		}
-
-		if(mu_header_ex(ctx, "Graphic Settings", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
-
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
-
-				if(strcmp(a->category, "Graphic Settings") != 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
-			}
-
-		}
-
-		if(mu_header_ex(ctx, "All settings", MU_OPT_EXPANDED)) {
-			int width = mu_get_current_container(ctx)->body.w;
-
-			for(int k = 0; k < list_size(&config_settings); k++) {
-				struct config_setting* a = list_get(&config_settings, k);
-
-				if(strcmp(a->category, "KyroSpades Settings") == 0 || strcmp(a->category, "Weapon Settings") == 0 || strcmp(a->category, "Spectator Mode Settings") == 0 || strcmp(a->category, "Weather") == 0 || strcmp(a->category, "Graphic Settings") == 0)
-					continue;
-
-				mu_layout_row(ctx, 3, (int[]) {0.65F * width, -0.05F * width, -1}, 0);
-
-				switch(a->type) {
-					case CONFIG_TYPE_STRING:
-						mu_text(ctx, a->name);
-						mu_textbox(ctx, a->value, a->max + 1);
-						break;
-					case CONFIG_TYPE_INT:
-						if(a->max == 1 && a->min == 0) {
-							mu_text(ctx, a->name);
-							mu_checkbox(ctx, "", a->value);
-						} else if(a->defaults_length > 0) {
-							mu_text(ctx, a->name);
-							int_slider_defaults(ctx, a);
-						} else if(a->max == INT_MAX) {
-							mu_text(ctx, a->name);
-							int_number(ctx, a->value);
-						} else {
-							mu_text(ctx, a->name);
-							int_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-					case CONFIG_TYPE_FLOAT:
-						mu_text(ctx, a->name);
-						if(a->max == INT_MAX) {
-							mu_number(ctx, a->value, 0.1F);
-							*(float*)a->value = max(a->min, *(float*)a->value);
-						} else {
-							mu_slider(ctx, a->value, a->min, a->max);
-						}
-						break;
-				}
-
-				if(*a->help) {
-					mu_push_id(ctx, &a->value, sizeof(a->value));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->help, 0)}, 0);
-						mu_text(ctx, a->help);
-						mu_end_popup(ctx);
-					}
-
-					if(mu_button(ctx, "?"))
-						mu_open_popup(ctx, "Help");
-					mu_pop_id(ctx);
-				} else {
-					mu_layout_next(ctx);
-				}
-			}
-
-		}
-
-		if(mu_header_ex(ctx, "Help", MU_OPT_EXPANDED)) {
+		if(selected_category == cat_count - 1) {
 			mu_layout_row(ctx, 1, (int[]) {-1}, -1);
 			mu_text(ctx,
 					"To edit a value directly, [SHIFT]+LMB on its container to change it using the keyboard. You can "
 					"also drag on a container to modify its value relative to its current one.\n\n"
 					"Settings are auto-applied when changed.");
+		} else {
+			int width = mu_get_current_container(ctx)->body.w;
+			for(int k = 0; k < list_size(&config_settings); k++) {
+				struct config_setting* a = list_get(&config_settings, k);
+				if(setting_in_category(a, selected_category))
+					render_setting_row(ctx, a, width);
+			}
 		}
 
 		mu_end_panel(ctx);
@@ -4410,12 +4288,24 @@ static void hud_controls_render(mu_Context* ctx, float scalex, float scaley) {
 					mu_pop_id(ctx);
 
 					mu_push_id(ctx, a->name, sizeof(a->name));
-					if(mu_begin_popup(ctx, "Help")) {
-						mu_layout_row(ctx, 1, (int[]) {ctx->text_width(ctx->style->font, a->name, 0)}, 0);
-						mu_text(ctx, a->name);
-						mu_end_popup(ctx);
+					mu_Container* help_cnt = mu_get_container(ctx, "Help");
+					if(help_cnt && help_cnt->open) {
+						int pw = ctx->text_width(ctx->style->font, a->name, 0) + ctx->style->padding * 4;
+						int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
+						help_cnt->rect = mu_rect((settings.window_width - pw) / 2,
+												  (settings.window_height - ph) / 2, pw, ph);
 					}
 
+					int pw = ctx->text_width(ctx->style->font, a->name, 0) + ctx->style->padding * 4;
+					int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
+					if(mu_begin_window_ex(ctx, "Help",
+										  mu_rect((settings.window_width - pw) / 2,
+												  (settings.window_height - ph) / 2, pw, ph),
+										  MU_OPT_AUTOSIZE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL | MU_OPT_POPUP | MU_OPT_CLOSED)) {
+						mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+						mu_text(ctx, a->name);
+						mu_end_window(ctx);
+					}
 					if(mu_button(ctx, "?"))
 						mu_open_popup(ctx, "Help");
 					mu_pop_id(ctx);

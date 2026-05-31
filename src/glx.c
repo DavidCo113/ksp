@@ -80,6 +80,7 @@ int glx_shader(const char* vertex, const char* fragment) {
 void glx_displaylist_create(struct glx_displaylist* x, bool has_color, bool has_normal) {
 	x->has_color = has_color;
 	x->has_normal = has_normal;
+	x->has_texcoord = false;
 
 #ifndef OPENGL_ES
 	if(!glx_version || settings.force_displaylist) {
@@ -105,7 +106,9 @@ void glx_displaylist_destroy(struct glx_displaylist* x) {
 #endif
 }
 
-void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, void* color, void* vertex, void* normal) {
+void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, void* color, void* vertex, void* normal,
+							void* texcoord) {
+	x->has_texcoord = (texcoord != NULL);
 	int grow_buffer = size > x->buffer_size;
 	x->buffer_size = max(x->buffer_size, size);
 	x->size = size;
@@ -117,6 +120,8 @@ void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, vo
 			glEnableClientState(GL_COLOR_ARRAY);
 		if(x->has_normal)
 			glEnableClientState(GL_NORMAL_ARRAY);
+		if(x->has_texcoord)
+			glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 
 		glNewList(x->legacy, GL_COMPILE);
 		if(size > 0) {
@@ -131,6 +136,8 @@ void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, vo
 
 			if(x->has_normal)
 				glNormalPointer(GL_BYTE, 0, normal);
+			if(x->has_texcoord)
+				glTexCoordPointer(2, GL_FLOAT, 0, texcoord);
 			glDrawArrays((type == GLX_DISPLAYLIST_POINTS) ? GL_POINTS : GL_QUADS, 0, x->size);
 		}
 		glEndList();
@@ -140,26 +147,38 @@ void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, vo
 			glDisableClientState(GL_COLOR_ARRAY);
 		if(x->has_normal)
 			glDisableClientState(GL_NORMAL_ARRAY);
+		if(x->has_texcoord)
+			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 	} else {
 #endif
 		size_t len_vertex = ((type == GLX_DISPLAYLIST_NORMAL) ? sizeof(GLshort) : sizeof(GLfloat)) * 3;
 		size_t len_color = x->has_color ? (sizeof(GLubyte) * 4) : 0;
 		size_t len_normal = x->has_normal ? (sizeof(GLbyte) * 3) : 0;
+		size_t len_texcoord = x->has_texcoord ? (sizeof(float) * 2) : 0;
 
 		glBindBuffer(GL_ARRAY_BUFFER, x->modern);
 
 		if(grow_buffer) {
-			glBufferData(GL_ARRAY_BUFFER, x->size * (len_vertex + len_color + len_normal), NULL, GL_STATIC_DRAW);
+			glBufferData(GL_ARRAY_BUFFER, x->size * (len_vertex + len_color + len_normal + len_texcoord), NULL,
+						GL_STATIC_DRAW);
 		}
 
 		glBufferSubData(GL_ARRAY_BUFFER, 0, x->size * len_vertex, vertex);
 
+		size_t offset = x->size * len_vertex;
+
 		if(x->has_color) {
-			glBufferSubData(GL_ARRAY_BUFFER, x->size * len_vertex, x->size * len_color, color);
+			glBufferSubData(GL_ARRAY_BUFFER, offset, x->size * len_color, color);
+			offset += x->size * len_color;
 		}
 
 		if(x->has_normal) {
-			glBufferSubData(GL_ARRAY_BUFFER, x->size * (len_vertex + len_color), x->size * len_normal, normal);
+			glBufferSubData(GL_ARRAY_BUFFER, offset, x->size * len_normal, normal);
+			offset += x->size * len_normal;
+		}
+
+		if(x->has_texcoord) {
+			glBufferSubData(GL_ARRAY_BUFFER, offset, x->size * len_texcoord, texcoord);
 		}
 
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -171,7 +190,13 @@ void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, vo
 void glx_displaylist_draw(struct glx_displaylist* x, int type) {
 #ifndef OPENGL_ES
 	if(!glx_version || settings.force_displaylist) {
-		glCallList(x->legacy);
+		if(x->has_texcoord) {
+			glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			glCallList(x->legacy);
+			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		} else {
+			glCallList(x->legacy);
+		}
 	} else {
 #endif
 		glEnableClientState(GL_VERTEX_ARRAY);
@@ -180,6 +205,7 @@ void glx_displaylist_draw(struct glx_displaylist* x, int type) {
 		size_t len_vertex = ((type == GLX_DISPLAYLIST_NORMAL) ? sizeof(GLshort) : sizeof(GLfloat)) * 3;
 		size_t len_color = x->has_color ? (sizeof(GLubyte) * 4) : 0;
 		size_t len_normal = x->has_normal ? (sizeof(GLbyte) * 3) : 0;
+		size_t len_texcoord = x->has_texcoord ? (sizeof(float) * 2) : 0;
 
 		switch(type) {
 			case GLX_DISPLAYLIST_NORMAL: glVertexPointer(3, GL_SHORT, 0, NULL); break;
@@ -187,14 +213,23 @@ void glx_displaylist_draw(struct glx_displaylist* x, int type) {
 			case GLX_DISPLAYLIST_ENHANCED: glVertexPointer(3, GL_FLOAT, 0, NULL); break;
 		}
 
+		size_t offset = x->size * len_vertex;
+
 		if(x->has_color) {
 			glEnableClientState(GL_COLOR_ARRAY);
-			glColorPointer(4, GL_UNSIGNED_BYTE, 0, (const void*)(x->size * len_vertex));
+			glColorPointer(4, GL_UNSIGNED_BYTE, 0, (const void*)offset);
+			offset += x->size * len_color;
 		}
 
 		if(x->has_normal) {
 			glEnableClientState(GL_NORMAL_ARRAY);
-			glNormalPointer(GL_BYTE, 0, (const void*)(x->size * (len_vertex + len_color)));
+			glNormalPointer(GL_BYTE, 0, (const void*)offset);
+			offset += x->size * len_normal;
+		}
+
+		if(x->has_texcoord) {
+			glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+			glTexCoordPointer(2, GL_FLOAT, 0, (const void*)offset);
 		}
 
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -209,6 +244,8 @@ void glx_displaylist_draw(struct glx_displaylist* x, int type) {
 #endif
 		}
 
+		if(x->has_texcoord)
+			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		if(x->has_normal)
 			glDisableClientState(GL_NORMAL_ARRAY);
 		if(x->has_color)

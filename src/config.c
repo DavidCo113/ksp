@@ -324,6 +324,7 @@ void config_save() {
 	config_setf("client", "shotgun_ads_fov", settings.shotgun_ads_fov);
 	config_setf("client", "smg_ads_fov", settings.smg_ads_fov);
 	config_seti("client", "disable_dynamic_fov", settings.disable_dynamic_fov);
+	config_seti("client", "textured_blocks", settings.textured_blocks);
 
 	config_sets("meta", "backend", CONFIG_BACKEND);
 
@@ -414,6 +415,7 @@ static int config_read_key(void* user, const char* section, const char* name, co
 		IMPORT_SETTING(settings.shotgun_ads_fov, shotgun_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
 		IMPORT_SETTING(settings.smg_ads_fov, smg_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
 		IMPORT_SETTING(settings.disable_dynamic_fov, disable_dynamic_fov, atoi(value));
+		IMPORT_SETTING(settings.textured_blocks, textured_blocks, atoi(value));
 	}
 	if(!strcmp(section, "meta")) {
 		if(!strcmp(name, "backend")) {
@@ -739,7 +741,6 @@ void config_reload() {
 				 .max = CAMERA_MAX_FOV,
 				 .name = "Camera FOV",
 				 .help = "Field of View in degrees",
-				 .category = "Graphic Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -841,6 +842,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Only aim while pressing RMB",
 				 .name = "Hold down sights",
+				 .category = "Weapon Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -895,12 +897,12 @@ void config_reload() {
 	list_add(&config_settings,
 			 &(struct config_setting) {
 				 .value = &settings_tmp.show_fps,
+				 .category = "HUD/UI Settings",
 				 .type = CONFIG_TYPE_INT,
 				 .min = 0,
 				 .max = 1,
 				 .name = "Show fps",
 				 .help = "Show current fps and ping ingame",
-				 .category = "Graphic Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -928,26 +930,7 @@ void config_reload() {
 				 .max = 1.f,
 				 .help = "Chat background opacity",
 				 .name = "Chat background opacity",
-			 });
-	list_add(&config_settings,
-			 &(struct config_setting) {
-				 .value = &settings_tmp.bg_tile,
-				 .type = CONFIG_TYPE_INT,
-				 .min = 0,
-				 .max = 1,
-				 .name = "Tile background",
-				 .help = "Background will be stretched if disabled",
-				 .category = "Graphic Settings",
-			 });
-	list_add(&config_settings,
-			 &(struct config_setting) {
-				 .value = &settings_tmp.bg_tile_speed,
-				 .type = CONFIG_TYPE_FLOAT,
-				 .min = 0,
-				 .max = 2,
-				 .name = "Tile speed",
-				 .category = "Graphic Settings",
-				 .help = "The speed at which the tiles move",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -957,6 +940,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "UI Accent: Red",
 				 .help = "UI accent color (red)",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -966,6 +950,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "UI Accent: Green",
 				 .help = "UI accent color (green)",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -975,6 +960,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "UI Accent: Blue",
 				 .help = "UI accent color (blue)",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -994,6 +980,7 @@ void config_reload() {
 				 .max = 1,
 				 .name = "Show names in spectator",
 				 .help = "Displays player names in spectator",
+				 .category = "Spectator Mode Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1003,7 +990,7 @@ void config_reload() {
 				 .max = 1,
 				 .name = "ESP in spectator",
 				 .help = "See players through walls in spectator mode",
-				 .category = "KyroSpades Settings",
+				 .category = "Spectator Mode Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1013,15 +1000,7 @@ void config_reload() {
 				 .max = 1,
 				 .name = "HUD shadows",
 				 .help = "Enables text shadows in various UI elements",
-			 });
-	list_add(&config_settings,
-			 &(struct config_setting) {
-				 .value = &settings_tmp.chat_flip_on_open,
-				 .type = CONFIG_TYPE_INT,
-				 .min = 0,
-				 .max = 1,
-				 .help = "Flip chat order when open",
-				 .name = "Reverse chat on open",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1031,6 +1010,17 @@ void config_reload() {
 				 .max = 8,
 				 .help = "Spacing between messages in chat",
 				 .name = "Chat spacing",
+				 .category = "Chat Settings",
+			 });
+	list_add(&config_settings,
+			 &(struct config_setting) {
+				 .value = &settings_tmp.chat_flip_on_open,
+				 .type = CONFIG_TYPE_INT,
+				 .min = 0,
+				 .max = 1,
+				 .help = "Reverse chat order, newest messages at the bottom",
+				 .name = "Reverse chat on open",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1039,7 +1029,7 @@ void config_reload() {
 				 .max = sizeof(settings.chat_mention_words) - 1,
 				 .name = "Mention words",
 				 .help = "Words separated by commas that highlight chat messages",
-				 .category = "KyroSpades Settings",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1049,7 +1039,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "Mention Highlight: Red",
 				 .help = "Mention highlight color (red)",
-				 .category = "KyroSpades Settings",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1059,7 +1049,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "Mention Highlight: Green",
 				 .help = "Mention highlight color (green)",
-				 .category = "KyroSpades Settings",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1069,7 +1059,7 @@ void config_reload() {
 				 .max = 255,
 				 .name = "Mention Highlight: Blue",
 				 .help = "Mention highlight color (blue)",
-				 .category = "KyroSpades Settings",
+				 .category = "Chat Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1079,6 +1069,7 @@ void config_reload() {
 				 .max = 4.F,
 				 .help = "Speed of movement in spectator",
 				 .name = "Spectator speed",
+				 .category = "Spectator Mode Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1098,7 +1089,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Use weapon-specific iron sights instead of a dot",
 				 .name = "Iron sight",
-				 .category = "Graphic Settings",
+				 .category = "Weapon Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1108,6 +1099,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Integrate gamemode features in the HUD",
 				 .name = "GMI (experimental)",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1117,7 +1109,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Always show live player count when GMI is enabled",
 				 .name = "Show live player count",
-				 .category = "KyroSpades Settings",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1136,6 +1128,7 @@ void config_reload() {
 				 .max = 32,
 				 .help = "Spacing between UI elements",
 				 .name = "UI Spacing",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1145,6 +1138,7 @@ void config_reload() {
 				 .max = 32,
 				 .help = "Added padding for UI elements",
 				 .name = "UI Padding",
+				 .category = "HUD/UI Settings",
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
@@ -1154,7 +1148,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Enable zoom animation when aiming down sights (ADS)",
 				 .name = "ADS zoom animation",
-				 .category = "Graphic Settings",
+				 .category = "Weapon Settings",
 			 });
 
 	list_add(&config_settings,
@@ -1165,7 +1159,6 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Automatically record demo files when connecting to a server",
 				 .name = "Auto Demo Recording",
-				 .category = "KyroSpades Settings",
 			 });
 
 	list_add(&config_settings,
@@ -1176,7 +1169,7 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Displays player statistics",
 				 .name = "Player stats display",
-				 .category = "KyroSpades Settings",
+				 .category = "HUD/UI Settings",
 			 });
 
 	list_add(&config_settings,
@@ -1187,7 +1180,7 @@ void config_reload() {
 				 .max = 1,
 			 .help = "Displays technical statistics (particles, vertices)",
 				 .name = "Technical stats display",
-				 .category = "KyroSpades Settings",
+				 .category = "HUD/UI Settings",
 		 });
 
 	list_add(&config_settings,
@@ -1198,7 +1191,17 @@ void config_reload() {
 				 .max = 1,
 				 .help = "Disable FOV changes on sprint/crouch and makes crouch instant",
 				 .name = "Disable Dynamic FOV",
-				 .category = "KyroSpades Settings",
+		 });
+
+	list_add(&config_settings,
+			 &(struct config_setting) {
+				 .value = &settings_tmp.textured_blocks,
+				 .type = CONFIG_TYPE_INT,
+				 .min = 0,
+				 .max = 1,
+				 .help = "Enables multitextured blocks with texture atlas blending",
+				 .name = "Textured Blocks",
+				 .category = "Graphic Settings",
 			 });
 
 	list_add(&config_settings,

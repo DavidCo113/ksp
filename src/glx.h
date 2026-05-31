@@ -35,6 +35,7 @@ struct glx_displaylist {
 	size_t buffer_size;
 	bool has_normal;
 	bool has_color;
+	bool has_texcoord;
 };
 
 enum {
@@ -52,7 +53,8 @@ void glx_disable_sphericalfog(void);
 
 void glx_displaylist_create(struct glx_displaylist* x, bool has_color, bool has_normal);
 void glx_displaylist_destroy(struct glx_displaylist* x);
-void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, void* color, void* vertex, void* normal);
+void glx_displaylist_update(struct glx_displaylist* x, size_t size, int type, void* color, void* vertex, void* normal,
+							void* texcoord);
 void glx_displaylist_draw(struct glx_displaylist* x, int type);
 
 #endif
