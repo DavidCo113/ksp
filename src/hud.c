@@ -3942,12 +3942,20 @@ static void render_setting_row(mu_Context* ctx, struct config_setting* a, int wi
 	if(*a->help) {
 		mu_push_id(ctx, &a->value, sizeof(a->value));
 
+		mu_Container* help_cnt = mu_get_container(ctx, "Help");
+		if(help_cnt && help_cnt->open) {
+			int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
+			int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
+			help_cnt->rect = mu_rect((settings.window_width - pw) / 2,
+									  (settings.window_height - ph) / 2, pw, ph);
+		}
+
+		int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
+		int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
 		if(mu_begin_window_ex(ctx, "Help",
-							  mu_rect(0, 0, 0, 0),
+							  mu_rect((settings.window_width - pw) / 2,
+									  (settings.window_height - ph) / 2, pw, ph),
 							  MU_OPT_AUTOSIZE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL | MU_OPT_POPUP | MU_OPT_CLOSED)) {
-			mu_Container* cnt = mu_get_current_container(ctx);
-			cnt->rect.x = (settings.window_width - cnt->rect.w) / 2;
-			cnt->rect.y = (settings.window_height - cnt->rect.h) / 2;
 			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 			mu_text(ctx, a->help);
 			mu_end_window(ctx);
