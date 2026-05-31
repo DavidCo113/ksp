@@ -296,14 +296,21 @@ void particle_create_snow(void) {
 	}
 	snow_timer = 0.0F;
 
-	struct Player* local = &players[local_player_id];
-	if(!local || !local->connected) {
-		return;
-	}
+	float player_x, player_y, player_z;
 
-	float player_x = local->pos.x;
-	float player_y = local->pos.y;
-	float player_z = local->pos.z;
+	if(camera_mode == CAMERAMODE_SPECTATOR) {
+		player_x = camera_x;
+		player_y = camera_y;
+		player_z = camera_z;
+	} else {
+		struct Player* local = &players[local_player_id];
+		if(!local || !local->connected) {
+			return;
+		}
+		player_x = local->pos.x;
+		player_y = local->pos.y;
+		player_z = local->pos.z;
+	}
 
 	float snow_height = player_y + 40.0F; // Spawn twice as high (same as rain)
 	float render_dist = sqrtf(settings.render_distance * settings.render_distance);

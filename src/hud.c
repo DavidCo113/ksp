@@ -1319,12 +1319,23 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 		   || (camera_mode == CAMERAMODE_SPECTATOR && cameracontroller_bodyview_mode)) {
 			if(cameracontroller_bodyview_player != local_player_id) {
 				font_select(FONT_FIXEDSYS);
+				char bv_buf[64];
+				snprintf(bv_buf, sizeof(bv_buf), "Spectating %s", players[cameracontroller_bodyview_player].name);
+				float bv_nh = 22.F;
+				float bv_nx = settings.window_width / 2.0F - font_length(bv_nh, bv_buf) / 2.0F;
+				float bv_ny = 4.F + bv_nh;
+				unsigned char bv_r = 255, bv_g = 255, bv_b = 255;
 				switch(players[cameracontroller_bodyview_player].team) {
-					case TEAM_1: glColor3ub(gamestate.team_1.red, gamestate.team_1.green, gamestate.team_1.blue); break;
-					case TEAM_2: glColor3ub(gamestate.team_2.red, gamestate.team_2.green, gamestate.team_2.blue); break;
+					case TEAM_1: bv_r = gamestate.team_1.red; bv_g = gamestate.team_1.green; bv_b = gamestate.team_1.blue; break;
+					case TEAM_2: bv_r = gamestate.team_2.red; bv_g = gamestate.team_2.green; bv_b = gamestate.team_2.blue; break;
 				}
-				font_centered(settings.window_width / 2.0F, settings.window_height * 0.25F, 16.0F,
-							  players[cameracontroller_bodyview_player].name);
+				glColor3ub(bv_r, bv_g, bv_b);
+				font_render(bv_nx - 1.F, bv_ny, bv_nh, bv_buf);
+				font_render(bv_nx + 1.F, bv_ny, bv_nh, bv_buf);
+				font_render(bv_nx, bv_ny - 1.F, bv_nh, bv_buf);
+				font_render(bv_nx, bv_ny + 1.F, bv_nh, bv_buf);
+				glColor3ub(255, 255, 255);
+				font_render(bv_nx, bv_ny, bv_nh, bv_buf);
 			}
 			font_select(FONT_FIXEDSYS);
 			mu_Color color = mu_accent_color(1.F, 255);
@@ -1346,6 +1357,30 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 				}
 			}
 			glColor3f(1.0F, 1.0F, 1.0F);
+		}
+
+		if(camera_mode == CAMERAMODE_SPECTATOR && !cameracontroller_bodyview_mode
+		   && player_intersection_type >= 0 && player_intersection_player >= 0
+		   && player_intersection_player < PLAYERS_MAX
+		   && players[player_intersection_player].team != TEAM_SPECTATOR) {
+			font_select(FONT_FIXEDSYS);
+			char hv_buf[64];
+			snprintf(hv_buf, sizeof(hv_buf), "Spectating %s", players[player_intersection_player].name);
+			float hv_nh = 22.F;
+			float hv_nx = settings.window_width / 2.0F - font_length(hv_nh, hv_buf) / 2.0F;
+			float hv_ny = 4.F + hv_nh;
+			unsigned char hv_r = 255, hv_g = 255, hv_b = 255;
+			switch(players[player_intersection_player].team) {
+				case TEAM_1: hv_r = gamestate.team_1.red; hv_g = gamestate.team_1.green; hv_b = gamestate.team_1.blue; break;
+				case TEAM_2: hv_r = gamestate.team_2.red; hv_g = gamestate.team_2.green; hv_b = gamestate.team_2.blue; break;
+			}
+			glColor3ub(hv_r, hv_g, hv_b);
+			font_render(hv_nx - 1.F, hv_ny, hv_nh, hv_buf);
+			font_render(hv_nx + 1.F, hv_ny, hv_nh, hv_buf);
+			font_render(hv_nx, hv_ny - 1.F, hv_nh, hv_buf);
+			font_render(hv_nx, hv_ny + 1.F, hv_nh, hv_buf);
+			glColor3ub(255, 255, 255);
+			font_render(hv_nx, hv_ny, hv_nh, hv_buf);
 		}
 
 		if(camera_mode == CAMERAMODE_FPS
@@ -3942,14 +3977,6 @@ static void render_setting_row(mu_Context* ctx, struct config_setting* a, int wi
 	if(*a->help) {
 		mu_push_id(ctx, &a->value, sizeof(a->value));
 
-		mu_Container* help_cnt = mu_get_container(ctx, "Help");
-		if(help_cnt && help_cnt->open) {
-			int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
-			int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
-			help_cnt->rect = mu_rect((settings.window_width - pw) / 2,
-									  (settings.window_height - ph) / 2, pw, ph);
-		}
-
 		int pw = ctx->text_width(ctx->style->font, a->help, 0) + ctx->style->padding * 4;
 		int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
 		if(mu_begin_window_ex(ctx, "Help",
@@ -3960,8 +3987,13 @@ static void render_setting_row(mu_Context* ctx, struct config_setting* a, int wi
 			mu_text(ctx, a->help);
 			mu_end_window(ctx);
 		}
-		if(mu_button(ctx, "?"))
+		if(mu_button(ctx, "?")) {
 			mu_open_popup(ctx, "Help");
+			mu_Container* cnt = mu_get_container(ctx, "Help");
+			if(cnt)
+				cnt->rect = mu_rect((settings.window_width - pw) / 2,
+									(settings.window_height - ph) / 2, pw, ph);
+		}
 		mu_pop_id(ctx);
 	} else {
 		mu_layout_next(ctx);
@@ -4288,14 +4320,6 @@ static void hud_controls_render(mu_Context* ctx, float scalex, float scaley) {
 					mu_pop_id(ctx);
 
 					mu_push_id(ctx, a->name, sizeof(a->name));
-					mu_Container* help_cnt = mu_get_container(ctx, "Help");
-					if(help_cnt && help_cnt->open) {
-						int pw = ctx->text_width(ctx->style->font, a->name, 0) + ctx->style->padding * 4;
-						int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
-						help_cnt->rect = mu_rect((settings.window_width - pw) / 2,
-												  (settings.window_height - ph) / 2, pw, ph);
-					}
-
 					int pw = ctx->text_width(ctx->style->font, a->name, 0) + ctx->style->padding * 4;
 					int ph = ctx->style->size.y + ctx->style->padding * 4 + ctx->style->title_height;
 					if(mu_begin_window_ex(ctx, "Help",
@@ -4306,8 +4330,13 @@ static void hud_controls_render(mu_Context* ctx, float scalex, float scaley) {
 						mu_text(ctx, a->name);
 						mu_end_window(ctx);
 					}
-					if(mu_button(ctx, "?"))
+					if(mu_button(ctx, "?")) {
 						mu_open_popup(ctx, "Help");
+						mu_Container* cnt = mu_get_container(ctx, "Help");
+						if(cnt)
+							cnt->rect = mu_rect((settings.window_width - pw) / 2,
+												(settings.window_height - ph) / 2, pw, ph);
+					}
 					mu_pop_id(ctx);
 				}
 			}

@@ -189,6 +189,16 @@ void drawScene() {
 		glEnable(GL_FOG);
 	}
 
+#ifndef OPENGL_ES
+	if(glx_fog && settings.textured_blocks) {
+		glFogi(GL_FOG_MODE, GL_LINEAR);
+		glFogf(GL_FOG_START, 0.0F);
+		glFogf(GL_FOG_END, settings.render_distance);
+		glFogfv(GL_FOG_COLOR, fog_color);
+		glEnable(GL_FOG);
+	}
+#endif
+
 	glShadeModel(GL_FLAT);
 	kv6_calclight(-1, -1, -1);
 	matrix_upload();
