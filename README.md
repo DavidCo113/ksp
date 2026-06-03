@@ -1,11 +1,12 @@
 # KyroSpades (Enhanced ButterSpades)
 This project is a modified fork of [ButterSpades](https://github.com/utf-4096/butterspades), introducing several quality-of-life improvements and visual enhancements. Link: https://github.com/Kyrope01/KyroSpades
 KyroSpades Discord server: https://discord.gg/FM7vSxtug4
-#### Date of latest update: 31th May, 2026
+#### Date of latest update: 3rd June, 2026
 
 ## New Features
 | Feature | Description |
 | :--- | :--- |
+| **Skins Menu Added** | Now you can easily switch skins of rifle, smg, shotgun, grenade, spade, intel and tent in the skins menu which apply instantly, even during gameplay. |
 | **Demo Recording and Replay** | Auto record demo setting added, is turned off by default, but when enabled starts recording demo automatically. Clicking on a demo in demo list opens up the demo in the demo replayer. |
 | **Gun Sound Variability** | Each time a shot is fired the sound's pitch and loudness are changed randomly to give it a slightly different but similar sound every time, which is a lot better than the very same sound every time. |
 | **Dynamic FOV** | Fov increases while running and decreases while crouching (has smooth animations) making gameplay feel much better. |
