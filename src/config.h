@@ -77,6 +77,7 @@ extern struct RENDER_OPTIONS {
 	int disable_raw_input;
 	int ui_spacing;
 	int ui_padding;
+	float ui_scale;
 	int esp_in_spec;
 	float ao_multiplier;
 	int show_live_player_count;
@@ -96,6 +97,15 @@ extern struct RENDER_OPTIONS {
 	float vignette;
 	int disable_dynamic_fov;
 	int textured_blocks;
+	int minimap_zoom;
+	int skin_spade;
+	int skin_grenade;
+	int skin_rifle;
+	int skin_smg;
+	int skin_shotgun;
+	int skin_player;
+	int skin_intel;
+	int skin_tent;
 } settings, settings_tmp;
 
 extern struct list config_keys;

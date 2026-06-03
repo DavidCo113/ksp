@@ -81,6 +81,7 @@ void kv6_rebuild_complete(void);
 void kv6_rebuild(struct kv6_t* kv6);
 void kv6_render(struct kv6_t* kv6, unsigned char team);
 void kv6_load(struct kv6_t* kv6, void* bytes, float scale);
+int kv6_reload(struct kv6_t* kv6, const char* path, float orig_scale);
 void kv6_init(void);
 int model_loaded_count(void);
 int model_total_voxels(void);

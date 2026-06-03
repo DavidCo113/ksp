@@ -24,6 +24,7 @@
 #include "common.h"
 #include "sound.h"
 #include "config.h"
+#include "file.h"
 #include "log.h"
 #include "camera.h"
 #include "entitysystem.h"
@@ -233,6 +234,41 @@ void sound_update() {
 
 extern short* drwav_open_and_read_file_s16(const char* filename, unsigned int* channels, unsigned int* sampleRate,
 										   uint64_t* totalFrameCount);
+
+int sound_reload(struct Sound_wav* wav, const char* name, float min, float max) {
+#ifdef USE_SOUND
+	if(!sound_enabled)
+		return 0;
+	if(!file_exists(name))
+		return -1;
+	if(wav->openal_buffer)
+		alDeleteBuffers(1, (ALuint*)&wav->openal_buffer);
+	unsigned int channels, samplerate;
+	uint64_t samplecount;
+	short* samples = drwav_open_and_read_file_s16(name, &channels, &samplerate, &samplecount);
+	if(samples == NULL) {
+		wav->openal_buffer = 0;
+		return -1;
+	}
+	short* audio;
+	if(channels > 1) {
+		audio = malloc(samplecount * sizeof(short) / 2);
+		if(!audio) { free(samples); return -1; }
+		for(uint64_t k = 0; k < samplecount / 2; k++)
+			audio[k] = ((int)samples[k * 2] + (int)samples[k * 2 + 1]) / 2;
+		free(samples);
+	}
+	alGenBuffers(1, &wav->openal_buffer);
+	alBufferData(wav->openal_buffer, AL_FORMAT_MONO16, (channels > 1) ? audio : samples,
+				 samplecount * sizeof(short) / channels, samplerate);
+	if(channels > 1) free(audio);
+	wav->min = min;
+	wav->max = max;
+	return 0;
+#else
+	return -1;
+#endif
+}
 
 void sound_load(struct Sound_wav* wav, char* name, float min, float max) {
 #ifdef USE_SOUND

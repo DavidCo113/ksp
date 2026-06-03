@@ -54,6 +54,7 @@
 #include "chatlog.h"
 #include "particle.h"
 #include "model.h"
+#include "skins.h"
 
 struct hud* hud_active;
 struct window_instance* hud_window;
@@ -111,6 +112,7 @@ void hud_init() {
 	hud_controls.ctx = malloc(sizeof(mu_Context));
 	hud_chatlog.ctx = malloc(sizeof(mu_Context));
 	hud_demolist.ctx = malloc(sizeof(mu_Context));
+	hud_skins.ctx = malloc(sizeof(mu_Context));
 
 	hud_change(&hud_serverlist);
 }
@@ -1855,7 +1857,7 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 				}
 				font_select(FONT_FIXEDSYS);
 
-				tracer_minimap(1, scalef, minimap_x, minimap_y);
+				tracer_minimap(1, scalef, minimap_x, minimap_y, 512.0F);
 
 				if(gamestate.gamemode_type == GAMEMODE_CTF) {
 					if(!gamestate.gamemode.ctf.team_1_intel) {
@@ -1942,8 +1944,13 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 				glColor3f(1.0F, 1.0F, 1.0F);
 			} else {
 				// minimized, top right
-				float view_x = camera_x - 64.0F; // min(max(camera_x-64.0F,0.0F),map_size_x+1-128.0F);
-				float view_z = camera_z - 64.0F; // min(max(camera_z-64.0F,0.0F),map_size_z+1-128.0F);
+				float zoom_sizes[] = {32.0F, 64.0F, 128.0F, 256.0F, 512.0F};
+				int zoom_idx = max(0, min(4, settings.minimap_zoom - 1));
+				float viewport = zoom_sizes[zoom_idx];
+				float half_vp = viewport / 2.0F;
+				float view_x = camera_x - half_vp;
+				float view_z = camera_z - half_vp;
+				float map_scale = 128.0F / viewport;
 				char sector_str[3] = {(int)(camera_x / 64.0F) + 'A', (int)(camera_z / 64.0F) + '1', 0};
 				glColor4f(0.F, 0.F, 0.F, 0.7F);
 
@@ -1962,60 +1969,60 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 				glColor3f(1.0F, 1.0F, 1.0F);
 
 				texture_draw_sector(&texture_minimap, settings.window_width - 143 * scalef, 585 * scalef, 128 * scalef,
-									128 * scalef, (camera_x - 64.0F) / 512.0F, (camera_z - 64.0F) / 512.0F, 0.25F,
-									0.25F);
+									128 * scalef, (camera_x - half_vp) / 512.0F, (camera_z - half_vp) / 512.0F,
+									viewport / 512.0F, viewport / 512.0F);
 
-				tracer_minimap(0, scalef, view_x, view_z);
+				tracer_minimap(0, scalef, view_x, view_z, viewport);
 
 				if(gamestate.gamemode_type == GAMEMODE_CTF) {
-					float tent1_x = min(max(gamestate.gamemode.ctf.team_1_base.x, view_x), view_x + 128.0F) - view_x;
-					float tent1_y = min(max(gamestate.gamemode.ctf.team_1_base.y, view_z), view_z + 128.0F) - view_z;
+					float tent1_x = min(max(gamestate.gamemode.ctf.team_1_base.x, view_x), view_x + viewport) - view_x;
+					float tent1_y = min(max(gamestate.gamemode.ctf.team_1_base.y, view_z), view_z + viewport) - view_z;
 
-					float tent2_x = min(max(gamestate.gamemode.ctf.team_2_base.x, view_x), view_x + 128.0F) - view_x;
-					float tent2_y = min(max(gamestate.gamemode.ctf.team_2_base.y, view_z), view_z + 128.0F) - view_z;
+					float tent2_x = min(max(gamestate.gamemode.ctf.team_2_base.x, view_x), view_x + viewport) - view_x;
+					float tent2_y = min(max(gamestate.gamemode.ctf.team_2_base.y, view_z), view_z + viewport) - view_z;
 
 					if(map_object_visible(gamestate.gamemode.ctf.team_1_base.x, 0.0F,
 										  gamestate.gamemode.ctf.team_1_base.y)) {
 						glColor3ub(gamestate.team_1.red * 0.94F, gamestate.team_1.green * 0.94F,
 								   gamestate.team_1.blue * 0.94F);
-						texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent1_x * scalef,
-												   (585 - tent1_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent1_x * map_scale * scalef,
+                           (585 - tent1_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 						glColor3f(1.0F, 1.0F, 1.0F);
-						texture_draw_rotated(&texture_medical, settings.window_width - 143 * scalef + tent1_x * scalef,
-											 (585 - tent1_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+						texture_draw_rotated(&texture_medical, settings.window_width - 143 * scalef + tent1_x * map_scale * scalef,
+											 (585 - tent1_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 					}
 					if(!gamestate.gamemode.ctf.team_1_intel) {
 						float intel_x
-							= min(max(gamestate.gamemode.ctf.team_1_intel_location.dropped.x, view_x), view_x + 128.0F)
+							= min(max(gamestate.gamemode.ctf.team_1_intel_location.dropped.x, view_x), view_x + viewport)
 							- view_x;
 						float intel_y
-							= min(max(gamestate.gamemode.ctf.team_1_intel_location.dropped.y, view_z), view_z + 128.0F)
+							= min(max(gamestate.gamemode.ctf.team_1_intel_location.dropped.y, view_z), view_z + viewport)
 							- view_z;
 						glColor3ub(gamestate.team_1.red, gamestate.team_1.green, gamestate.team_1.blue);
-						texture_draw_rotated(&texture_intel, settings.window_width - 143 * scalef + intel_x * scalef,
-											 (585 - intel_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+						texture_draw_rotated(&texture_intel, settings.window_width - 143 * scalef + intel_x * map_scale * scalef,
+											 (585 - intel_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 					}
 
 					if(map_object_visible(gamestate.gamemode.ctf.team_2_base.x, 0.0F,
 										  gamestate.gamemode.ctf.team_2_base.y)) {
 						glColor3ub(gamestate.team_2.red * 0.94F, gamestate.team_2.green * 0.94F,
 								   gamestate.team_2.blue * 0.94F);
-						texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent2_x * scalef,
-												   (585 - tent2_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent2_x * map_scale * scalef,
+                           (585 - tent2_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 						glColor3f(1.0F, 1.0F, 1.0F);
-						texture_draw_rotated(&texture_medical, settings.window_width - 143 * scalef + tent2_x * scalef,
-											 (585 - tent2_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+						texture_draw_rotated(&texture_medical, settings.window_width - 143 * scalef + tent2_x * map_scale * scalef,
+											 (585 - tent2_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 					}
 					if(!gamestate.gamemode.ctf.team_2_intel) {
 						float intel_x
-							= min(max(gamestate.gamemode.ctf.team_2_intel_location.dropped.x, view_x), view_x + 128.0F)
+							= min(max(gamestate.gamemode.ctf.team_2_intel_location.dropped.x, view_x), view_x + viewport)
 							- view_x;
 						float intel_y
-							= min(max(gamestate.gamemode.ctf.team_2_intel_location.dropped.y, view_z), view_z + 128.0F)
+							= min(max(gamestate.gamemode.ctf.team_2_intel_location.dropped.y, view_z), view_z + viewport)
 							- view_z;
 						glColor3ub(gamestate.team_2.red, gamestate.team_2.green, gamestate.team_2.blue);
-						texture_draw_rotated(&texture_intel, settings.window_width - 143 * scalef + intel_x * scalef,
-											 (585 - intel_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+						texture_draw_rotated(&texture_intel, settings.window_width - 143 * scalef + intel_x * map_scale * scalef,
+											 (585 - intel_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 					}
 				}
 				if(gamestate.gamemode_type == GAMEMODE_TC) {
@@ -2032,10 +2039,10 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 							default:
 							case TEAM_SPECTATOR: glColor3ub(0, 0, 0);
 						}
-						float t_x = min(max(gamestate.gamemode.tc.territory[k].x, view_x), view_x + 128.0F) - view_x;
-						float t_y = min(max(gamestate.gamemode.tc.territory[k].y, view_z), view_z + 128.0F) - view_z;
-						texture_draw_rotated(&texture_command, settings.window_width - 143 * scalef + t_x * scalef,
-											 (585 - t_y) * scalef, 12 * scalef, 12 * scalef, 0.0F);
+						float t_x = min(max(gamestate.gamemode.tc.territory[k].x, view_x), view_x + viewport) - view_x;
+						float t_y = min(max(gamestate.gamemode.tc.territory[k].y, view_z), view_z + viewport) - view_z;
+						texture_draw_rotated(&texture_command, settings.window_width - 143 * scalef + t_x * map_scale * scalef,
+											 (585 - t_y * map_scale) * scalef, 12 * scalef, 12 * scalef, 0.0F);
 					}
 				}
 
@@ -2058,13 +2065,13 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 						}
 						float player_x = ((k == local_player_id) ? camera_x : players[k].pos.x) - view_x;
 						float player_y = ((k == local_player_id) ? camera_z : players[k].pos.z) - view_z;
-						if(player_x > 0.0F && player_x < 128.0F && player_y > 0.0F && player_y < 128.0F) {
+						if(player_x >= 0.0F && player_x <= viewport && player_y >= 0.0F && player_y <= viewport) {
 							float ang = (k == local_player_id) ?
 								camera_rot_x + PI :
 								-atan2(players[k].orientation.z, players[k].orientation.x) - HALFPI;
 							texture_draw_rotated(&texture_player,
-												 settings.window_width - 143 * scalef + player_x * scalef,
-												 (585 - player_y) * scalef, 12 * scalef, 12 * scalef, ang);
+												 settings.window_width - 143 * scalef + player_x * map_scale * scalef,
+												 (585 - player_y * map_scale) * scalef, 12 * scalef, 12 * scalef, ang);
 						}
 					}
 				}
@@ -2618,6 +2625,17 @@ static void hud_ingame_keyboard(int key, int action, int mods, int internal) {
 				char volstr[64];
 				sprintf(volstr, "Volume: %i", settings.volume);
 				chat_add(0, 0x00FFFF, volstr);
+			}
+
+			if(key == WINDOW_KEY_MAP_ZOOM) {
+				settings.minimap_zoom++;
+				if(settings.minimap_zoom > 5)
+					settings.minimap_zoom = 1;
+				char zoomstr[64];
+				float zoom_sizes[] = {32.0F, 64.0F, 128.0F, 256.0F, 512.0F};
+				sprintf(zoomstr, "Minimap: %ix%i", (int)zoom_sizes[settings.minimap_zoom - 1],
+						(int)zoom_sizes[settings.minimap_zoom - 1]);
+				chat_add(0, 0x00FFFF, zoomstr);
 			}
 
 			if(key == WINDOW_KEY_COMMAND) {
@@ -3492,9 +3510,9 @@ static void hud_common_nav(mu_Context* ctx, mu_Rect* frame, float scalex, float 
 		}
 	} else {
 		if(serverlist_is_outdated) {
-			mu_layout_row(ctx, 7, (int[]) {A, B, C, N, D, E, -1}, 0);
+			mu_layout_row(ctx, 8, (int[]) {A, B, C, N, N, D, E, -1}, 0);
 		} else {
-			mu_layout_row(ctx, 6, (int[]) {A, B, C, N, E, -1}, 0);
+			mu_layout_row(ctx, 7, (int[]) {A, B, C, N, N, E, -1}, 0);
 		}
 	}
 
@@ -3504,6 +3522,7 @@ static void hud_common_nav(mu_Context* ctx, mu_Rect* frame, float scalex, float 
 
 	hud_nav_button(ctx, &hud_settings, "Settings");
 	hud_nav_button(ctx, &hud_controls, "Controls");
+	hud_nav_button(ctx, &hud_skins, "Skins");
 	if(!network_connected)
 		hud_nav_button(ctx, &hud_demolist, "Demos");
 
@@ -4123,6 +4142,208 @@ struct hud hud_settings = {
 	NULL,
 };
 
+
+/*         HUD_SKINS START        */
+
+static int skins_selected_category = 0;
+static int skins_selected_entry[SKIN_CATEGORIES] = {0, 0, 0, 0, 0, 0, 0, 0};
+static int skins_preview_cells_x[256];
+static int skins_preview_cells_y[256];
+static int skins_preview_cat[256];
+static int skins_preview_ent[256];
+static int skins_preview_cell_count = 0;
+
+static void mu_draw_control_frame_inner(mu_Context* ctx, mu_Rect rect, mu_Color color) {
+	mu_draw_rect(ctx, rect, color);
+}
+
+static void hud_skins_init() {
+	skins_selected_category = 0;
+	skins_selected_entry[0] = settings.skin_spade;
+	skins_selected_entry[1] = settings.skin_grenade;
+	skins_selected_entry[2] = settings.skin_rifle;
+	skins_selected_entry[3] = settings.skin_smg;
+	skins_selected_entry[4] = settings.skin_shotgun;
+	skins_selected_entry[6] = settings.skin_intel;
+	skins_selected_entry[7] = settings.skin_tent;
+	skins_scan();
+}
+
+static void hud_skins_render(mu_Context* ctx, float scalex, float scaley) {
+	hud_common_render(ctx);
+
+	mu_Rect frame = mu_rect(0, 0, settings.window_width, settings.window_height);
+
+	if(mu_begin_window_ex(ctx, "Main", frame, MU_OPT_NOFRAME | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
+		mu_Container* cnt = mu_get_current_container(ctx);
+		cnt->rect = frame;
+
+		hud_common_nav(ctx, &frame, scalex, scaley);
+
+		mu_layout_row(ctx, 2, (int[]) {150, -1}, -1);
+
+		mu_begin_panel(ctx, "Categories");
+		mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+
+		for(int i = 0; i < SKIN_CATEGORIES; i++) {
+			if(i == SKIN_PLAYER) continue;
+			mu_Color old_border = ctx->style->colors[MU_COLOR_BORDER];
+			mu_Color old_text = ctx->style->colors[MU_COLOR_TEXT];
+			mu_Color accent = {settings.ui_accent_r, settings.ui_accent_g, settings.ui_accent_b, 255};
+			ctx->style->colors[MU_COLOR_BORDER] = accent;
+			if(skins_selected_category == i) {
+				ctx->style->colors[MU_COLOR_TEXT] = (mu_Color){0, 0, 0, 255};
+				mu_button_ex(ctx, skin_categories[i].label, 0, MU_OPT_NOINTERACT);
+			} else {
+				ctx->style->colors[MU_COLOR_TEXT] = (mu_Color){255, 255, 255, 255};
+				if(mu_button(ctx, skin_categories[i].label))
+					skins_selected_category = i;
+			}
+			ctx->style->colors[MU_COLOR_TEXT] = old_text;
+			ctx->style->colors[MU_COLOR_BORDER] = old_border;
+		}
+
+		mu_end_panel(ctx);
+
+		mu_begin_panel(ctx, "Skins");
+		struct skin_category* cat = &skin_categories[skins_selected_category];
+
+		if(cat->count > 0) {
+			int cell_w = 140 * scalex;
+			int cell_h = 160 * scaley;
+			int panel_w = mu_get_current_container(ctx)->body.w;
+			int cols = panel_w / cell_w;
+			if(cols < 1) cols = 1;
+
+			int widths[cols];
+			for(int c = 0; c < cols; c++)
+				widths[c] = panel_w / cols;
+
+			int font_h = ctx->text_height(ctx->style->font);
+
+			mu_layout_row(ctx, cols, widths, cell_h);
+
+			skins_preview_cell_count = 0;
+
+			for(int i = 0; i < cat->count; i++) {
+				if(skins_preview_cell_count >= 256)
+					break;
+
+				mu_push_id(ctx, &i, sizeof(i));
+
+				mu_layout_begin_column(ctx);
+
+				mu_layout_row(ctx, 1, (int[]) {-1}, cell_h);
+
+				int is_selected = (skins_selected_entry[skins_selected_category] == i);
+
+				mu_Color old_button = ctx->style->colors[MU_COLOR_BUTTON];
+				mu_Color old_border = ctx->style->colors[MU_COLOR_BORDER];
+				mu_Color old_text = ctx->style->colors[MU_COLOR_TEXT];
+
+				if(is_selected) {
+					ctx->style->colors[MU_COLOR_BORDER] = (mu_Color){255, 255, 0, 255};
+					ctx->style->colors[MU_COLOR_BUTTON] = (mu_Color){0, 0, 0, 60};
+				} else {
+					ctx->style->colors[MU_COLOR_BORDER] = (mu_Color){settings.ui_accent_r, settings.ui_accent_g, settings.ui_accent_b, 255};
+					ctx->style->colors[MU_COLOR_BUTTON] = (mu_Color){0, 0, 0, 30};
+				}
+
+				if(mu_button_ex(ctx, "", 0, MU_OPT_ALIGNCENTER)) {
+					if(skins_apply(skins_selected_category, i) == 0) {
+						skins_selected_entry[skins_selected_category] = i;
+						switch(skins_selected_category) {
+							case SKIN_SPADE: settings.skin_spade = i; break;
+							case SKIN_GRENADE: settings.skin_grenade = i; break;
+							case SKIN_RIFLE: settings.skin_rifle = i; break;
+							case SKIN_SMG: settings.skin_smg = i; break;
+							case SKIN_SHOTGUN: settings.skin_shotgun = i; break;
+							case SKIN_INTEL: settings.skin_intel = i; break;
+							case SKIN_TENT: settings.skin_tent = i; break;
+						}
+						config_save();
+					}
+				}
+
+				ctx->style->colors[MU_COLOR_BUTTON] = old_button;
+				ctx->style->colors[MU_COLOR_BORDER] = old_border;
+
+				mu_Rect r = ctx->last_rect;
+
+				if(r.w > 0 && r.h > 0) {
+					int name_overlay_h = font_h + ctx->style->padding * 2;
+					mu_Rect name_rect = {r.x, r.y + r.h - name_overlay_h, r.w, name_overlay_h};
+					mu_draw_rect(ctx, name_rect, (mu_Color){0, 0, 0, 140});
+					ctx->style->colors[MU_COLOR_TEXT] = (mu_Color){255, 255, 255, 255};
+					mu_draw_control_text(ctx, cat->entries[i].name, name_rect, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+					ctx->style->colors[MU_COLOR_TEXT] = old_text;
+
+					skins_preview_cells_x[skins_preview_cell_count] = r.x + r.w / 2;
+					int model_area_h = r.h - name_overlay_h;
+					skins_preview_cells_y[skins_preview_cell_count] = settings.window_height - (r.y + model_area_h * 0.4F);
+					skins_preview_cat[skins_preview_cell_count] = skins_selected_category;
+					skins_preview_ent[skins_preview_cell_count] = i;
+					skins_preview_cell_count++;
+				}
+
+				mu_layout_end_column(ctx);
+
+				mu_pop_id(ctx);
+			}
+		} else {
+			mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+			mu_text(ctx, "No skins found for this weapon");
+		}
+
+		mu_end_panel(ctx);
+
+		mu_end_window(ctx);
+	}
+
+	for(int k = 0; k < skins_preview_cell_count; k++) {
+		skins_render_preview(skins_preview_cat[k], skins_preview_ent[k],
+			skins_preview_cells_x[k], skins_preview_cells_y[k],
+			100.0F * scalex);
+	}
+}
+
+static void hud_skins_keyboard(int key, int action, int mods, int internal) {
+	if(action == WINDOW_PRESS && show_exit && key == WINDOW_KEY_ESCAPE) {
+		hud_change(&hud_ingame);
+		show_exit = 0;
+		window_mousemode(WINDOW_CURSOR_DISABLED);
+	}
+}
+
+static void hud_skins_touch(void* finger, int action, float x, float y, float dx, float dy) {
+	window_setmouseloc(x, y);
+}
+
+static struct texture* hud_skins_ui_images(int icon_id, bool* resize) {
+	switch(icon_id) {
+		case MU_ICON_CHECK: return &texture_ui_box_check;
+		case MU_ICON_EXPANDED: return &texture_ui_expanded;
+		case MU_ICON_COLLAPSED: return &texture_ui_collapsed;
+		default: return NULL;
+	}
+}
+
+struct hud hud_skins = {
+	hud_skins_init,
+	NULL,
+	hud_skins_render,
+	hud_skins_keyboard,
+	NULL,
+	NULL,
+	NULL,
+	hud_skins_touch,
+	hud_skins_ui_images,
+	0,
+	0,
+	NULL,
+};
+
+
 /*         HUD_CONTROLS START        */
 
 static struct config_key_pair* hud_controls_edit;
@@ -4141,6 +4362,7 @@ static char demo_rename_buf[256];
 
 static void hud_demolist_init(void) {
 	if(!hud_demolist.ctx) hud_demolist.ctx = malloc(sizeof(mu_Context));
+	hud_skins.ctx = malloc(sizeof(mu_Context));
 	if(demo_files) { for(int i = 0; i < demo_file_count; i++) free(demo_files[i]); free(demo_files); demo_files = NULL; }
 	demo_file_count = demo_list_files(&demo_files);
 }
@@ -4326,7 +4548,7 @@ static void hud_controls_render(mu_Context* ctx, float scalex, float scaley) {
 										  mu_rect((settings.window_width - pw) / 2,
 												  (settings.window_height - ph) / 2, pw, ph),
 										  MU_OPT_AUTOSIZE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL | MU_OPT_POPUP | MU_OPT_CLOSED)) {
-						mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+				mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 						mu_text(ctx, a->name);
 						mu_end_window(ctx);
 					}

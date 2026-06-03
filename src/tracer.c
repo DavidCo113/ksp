@@ -45,6 +45,7 @@ struct tracer_minimap_info {
 	float scalef;
 	float minimap_x;
 	float minimap_y;
+	float viewport;
 };
 
 static bool tracer_minimap_single(void* obj, void* user) {
@@ -58,23 +59,25 @@ static bool tracer_minimap_single(void* obj, void* user) {
 	} else {
 		float tracer_x = t->r.origin.x - info->minimap_x;
 		float tracer_y = t->r.origin.z - info->minimap_y;
-		if(tracer_x > 0.0F && tracer_x < 128.0F && tracer_y > 0.0F && tracer_y < 128.0F) {
+		if(tracer_x >= 0.0F && tracer_x <= info->viewport && tracer_y >= 0.0F && tracer_y <= info->viewport) {
+			float map_scale = 128.0F / info->viewport;
 			float ang = -atan2(t->r.direction.z, t->r.direction.x) - HALFPI;
-			texture_draw_rotated(&texture_tracer, settings.window_width - 143 * info->scalef + tracer_x * info->scalef,
-								 (585 - tracer_y) * info->scalef, 15 * info->scalef, 15 * info->scalef, ang);
+			texture_draw_rotated(&texture_tracer, settings.window_width - 143 * info->scalef + tracer_x * map_scale * info->scalef,
+								 (585 - tracer_y * map_scale) * info->scalef, 15 * info->scalef, 15 * info->scalef, ang);
 		}
 	}
 
 	return false;
 }
 
-void tracer_minimap(int large, float scalef, float minimap_x, float minimap_y) {
+void tracer_minimap(int large, float scalef, float minimap_x, float minimap_y, float viewport) {
 	entitysys_iterate(&tracers,
 					  &(struct tracer_minimap_info) {
 						  .large = large,
 						  .scalef = scalef,
 						  .minimap_x = minimap_x,
 						  .minimap_y = minimap_y,
+						  .viewport = viewport,
 					  },
 					  tracer_minimap_single);
 }

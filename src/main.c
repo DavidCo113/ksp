@@ -46,6 +46,7 @@
 #include "matrix.h"
 #include "texture.h"
 #include "chunk.h"
+#include "skins.h"
 #include "chatlog.h"
 #include "main.h"
 
@@ -661,8 +662,8 @@ void display() {
 	matrix_identity(matrix_model);
 	matrix_upload();
 	matrix_upload_p();
-	float scalex = settings.window_width / 800.0F;
-	float scalef = settings.window_height / 600.0F;
+	float scalex = (settings.window_width / 800.0F) * settings.ui_scale;
+	float scalef = (settings.window_height / 600.0F) * settings.ui_scale;
 
 	if(hud_active->render_2D) {
 		mu_Context* ctx = hud_active->ctx;
@@ -802,6 +803,7 @@ void init() {
 	network_init();
 	ping_init();
 	kv6_init();
+	skins_init();
 	texture_init();
 	sound_init();
 	tracer_init();
@@ -1074,6 +1076,16 @@ int main(int argc, char** argv) {
 	settings.smg_ads_fov = CAMERA_DEFAULT_FOV;
 	settings.disable_dynamic_fov = 0;
 	settings.textured_blocks = 0;
+	settings.minimap_zoom = 3;
+	settings.skin_spade = 0;
+	settings.skin_grenade = 0;
+	settings.skin_rifle = 0;
+	settings.skin_smg = 0;
+	settings.skin_shotgun = 0;
+	settings.skin_player = 0;
+	settings.skin_intel = 0;
+	settings.skin_tent = 0;
+	settings.ui_scale = 1.0F;
 	settings.chat_mention_r = 255;
 	settings.chat_mention_g = 255;
 	strcpy(settings.name, "DEV_CLIENT");

@@ -243,6 +243,20 @@ void kv6_load(struct kv6_t* kv6, void* bytes, float scale) {
 	}
 }
 
+int kv6_reload(struct kv6_t* kv6, const char* path, float orig_scale) {
+	if(!file_exists(path))
+		return -1;
+	void* data = file_load(path);
+	if(!data)
+		return -1;
+	if(kv6->voxels)
+		free(kv6->voxels);
+	kv6_load(kv6, data, orig_scale);
+	free(data);
+	kv6_rebuild(kv6);
+	return 0;
+}
+
 void kv6_rebuild(struct kv6_t* kv6) {
 	if(kv6->has_display_list) {
 		glx_displaylist_destroy(kv6->display_list + 0);

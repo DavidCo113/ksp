@@ -32,7 +32,7 @@ struct Tracer {
 	float created;
 };
 
-void tracer_minimap(int large, float scalef, float minimap_x, float minimap_y);
+void tracer_minimap(int large, float scalef, float minimap_x, float minimap_y, float viewport);
 void tracer_pvelocity(float* o, struct Player* p);
 void tracer_add(int type, float x, float y, float z, float dx, float dy, float dz);
 void tracer_update(float dt);

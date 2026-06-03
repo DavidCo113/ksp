@@ -311,6 +311,7 @@ void config_save() {
 	config_seti("client", "disable_raw_input", settings.disable_raw_input);
 	config_seti("client", "ui_spacing", settings.ui_spacing);
 	config_seti("client", "ui_padding", settings.ui_padding);
+	config_setf("client", "ui_scale", settings.ui_scale);
 	config_setf("client", "ao_multiplier", settings.ao_multiplier);
 	config_seti("client", "show_live_player_count", settings.show_live_player_count);
 	config_seti("client", "ads_zoom_animation", settings.ads_zoom_animation);
@@ -325,6 +326,15 @@ void config_save() {
 	config_setf("client", "smg_ads_fov", settings.smg_ads_fov);
 	config_seti("client", "disable_dynamic_fov", settings.disable_dynamic_fov);
 	config_seti("client", "textured_blocks", settings.textured_blocks);
+	config_seti("client", "minimap_zoom", settings.minimap_zoom);
+	config_seti("client", "skin_spade", settings.skin_spade);
+	config_seti("client", "skin_grenade", settings.skin_grenade);
+	config_seti("client", "skin_rifle", settings.skin_rifle);
+	config_seti("client", "skin_smg", settings.skin_smg);
+	config_seti("client", "skin_shotgun", settings.skin_shotgun);
+	config_seti("client", "skin_player", settings.skin_player);
+	config_seti("client", "skin_intel", settings.skin_intel);
+	config_seti("client", "skin_tent", settings.skin_tent);
 
 	config_sets("meta", "backend", CONFIG_BACKEND);
 
@@ -402,6 +412,7 @@ static int config_read_key(void* user, const char* section, const char* name, co
 		IMPORT_SETTING(settings.disable_raw_input, disable_raw_input, atoi(value));
 		IMPORT_SETTING(settings.ui_spacing, ui_spacing, atoi(value));
 		IMPORT_SETTING(settings.ui_padding, ui_padding, atoi(value));
+		IMPORT_SETTING(settings.ui_scale, ui_scale, fmaxf(0.25F, atof(value)));
 		IMPORT_SETTING(settings.ao_multiplier, ao_multiplier, fmaxf(0.0F, atof(value)));
 		IMPORT_SETTING(settings.show_live_player_count, show_live_player_count, atoi(value));
 		IMPORT_SETTING(settings.ads_zoom_animation, ads_zoom_animation, atoi(value));
@@ -416,6 +427,15 @@ static int config_read_key(void* user, const char* section, const char* name, co
 		IMPORT_SETTING(settings.smg_ads_fov, smg_ads_fov, fmaxf(5.0F, fminf(atof(value), CAMERA_DEFAULT_FOV)));
 		IMPORT_SETTING(settings.disable_dynamic_fov, disable_dynamic_fov, atoi(value));
 		IMPORT_SETTING(settings.textured_blocks, textured_blocks, atoi(value));
+		IMPORT_SETTING(settings.minimap_zoom, minimap_zoom, max(1, min(5, atoi(value))));
+		IMPORT_SETTING(settings.skin_spade, skin_spade, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_grenade, skin_grenade, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_rifle, skin_rifle, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_smg, skin_smg, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_shotgun, skin_shotgun, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_player, skin_player, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_intel, skin_intel, max(0, atoi(value)));
+		IMPORT_SETTING(settings.skin_tent, skin_tent, max(0, atoi(value)));
 	}
 	if(!strcmp(section, "meta")) {
 		if(!strcmp(name, "backend")) {
@@ -575,6 +595,7 @@ void config_reload() {
 	config_register_key(WINDOW_KEY_ESCAPE, SDLK_ESCAPE, "quit_game", 0, "Quit", "Game");
 	config_register_key(WINDOW_KEY_ESCAPE, SDLK_AC_BACK, NULL, 0, NULL, NULL);
 	config_register_key(WINDOW_KEY_MAP, SDLK_m, "view_map", 1, "Map", "Information");
+	config_register_key(WINDOW_KEY_MAP_ZOOM, SDLK_x, "map_zoom", 0, "Map zoom", "Information");
 	config_register_key(WINDOW_KEY_CROUCH, SDLK_LCTRL, "crouch", 0, "Crouch", "Movement");
 	config_register_key(WINDOW_KEY_SNEAK, SDLK_v, "sneak", 0, "Sneak", "Movement");
 	config_register_key(WINDOW_KEY_ENTER, SDLK_RETURN, NULL, 0, NULL, NULL);
@@ -638,6 +659,7 @@ void config_reload() {
 	config_register_key(WINDOW_KEY_TAB, GLFW_KEY_TAB, "view_score", 0, "Score", "Information");
 	config_register_key(WINDOW_KEY_ESCAPE, GLFW_KEY_ESCAPE, "quit_game", 0, "Quit", "Game");
 	config_register_key(WINDOW_KEY_MAP, GLFW_KEY_M, "view_map", 1, "Map", "Information");
+	config_register_key(WINDOW_KEY_MAP_ZOOM, GLFW_KEY_X, "map_zoom", 0, "Map zoom", "Information");
 	config_register_key(WINDOW_KEY_CROUCH, GLFW_KEY_LEFT_CONTROL, "crouch", 0, "Crouch", "Movement");
 	config_register_key(WINDOW_KEY_SNEAK, GLFW_KEY_V, "sneak", 0, "Sneak", "Movement");
 	config_register_key(WINDOW_KEY_ENTER, GLFW_KEY_ENTER, NULL, 0, NULL, NULL);
@@ -1142,6 +1164,16 @@ void config_reload() {
 			 });
 	list_add(&config_settings,
 			 &(struct config_setting) {
+				 .value = &settings_tmp.ui_scale,
+				 .type = CONFIG_TYPE_FLOAT,
+				 .min = 0.25F,
+				 .max = 2.0F,
+				 .help = "Multiplier for overall UI size",
+				 .name = "UI Scale",
+				 .category = "HUD/UI Settings",
+			 });
+	list_add(&config_settings,
+			 &(struct config_setting) {
 				 .value = &settings_tmp.ads_zoom_animation,
 				 .type = CONFIG_TYPE_INT,
 				 .min = 0,
@@ -1202,6 +1234,17 @@ void config_reload() {
 				 .help = "Enables multitextured blocks with texture atlas blending",
 				 .name = "Textured Blocks",
 				 .category = "Graphic Settings",
+			 });
+
+	list_add(&config_settings,
+			 &(struct config_setting) {
+				 .value = &settings_tmp.minimap_zoom,
+				 .type = CONFIG_TYPE_INT,
+				 .min = 1,
+				 .max = 5,
+				 .help = "Minimap zoom level (1-5)",
+				 .name = "Minimap zoom",
+				 .category = "HUD/UI Settings",
 			 });
 
 	list_add(&config_settings,
