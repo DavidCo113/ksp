@@ -60,7 +60,12 @@ struct kv6_t model_shotgun_casing;
 
 static void kv6_load_file(struct kv6_t* kv6, char* filename, float scale) {
 	void* data = file_load(filename);
+	if(!data) {
+		log_debug("Failed to load model: %s", filename);
+		return;
+	}
 	kv6_load(kv6, data, scale);
+	log_debug("Loaded model: %s (%i voxels)", filename, kv6->voxel_count);
 	free(data);
 }
 

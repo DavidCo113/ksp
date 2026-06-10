@@ -41,14 +41,16 @@
 #include "gmi.h"
 #include "config.h"
 #include "demo.h"
+#include "window.h"
 
 void (*packets[256])(void* data, int len) = {NULL};
 
 int network_connected = 0;
 int network_logged_in = 0;
 int network_map_transfer = 0;
-int network_received_packets = 0;
+int network_map_transfer_end = 0;
 int network_map_cached = 0;
+int network_received_packets = 0;
 char network_current_ip[64] = {0};
 int  network_current_port = 0;
 
@@ -361,7 +363,7 @@ void read_PacketStateData(void* data, int len) {
 		camera_mode = CAMERAMODE_SELECTION;
 		screen_current = SCREEN_TEAM_SELECT;
 	}
-	network_map_transfer = 0;
+	network_map_transfer_end = 1;
 	chat_popup_duration = 0;
 
 	log_info("map data was %i bytes", compressed_chunk_data_offset);
@@ -381,6 +383,7 @@ void read_PacketStateData(void* data, int len) {
 				CHECK_ALLOCATION_ERROR(decompressed)
 			}
 			if(r == LIBDEFLATE_SUCCESS) {
+				log_debug("Map decompressed: %zu bytes", decompressed_size);
 				demo_playback_save_initial_map(decompressed, decompressed_size);
 				if(!demo_is_seeking())
 					map_vxl_load(decompressed, decompressed_size);
@@ -395,8 +398,10 @@ void read_PacketStateData(void* data, int len) {
 				chunk_rebuild_all();
 				break;
 			}
-			if(r == LIBDEFLATE_BAD_DATA || r == LIBDEFLATE_SHORT_OUTPUT)
+			if(r == LIBDEFLATE_BAD_DATA || r == LIBDEFLATE_SHORT_OUTPUT) {
+				log_debug("Map decompression failed: r=%i", r);
 				break;
+			}
 		}
 free(decompressed);
 		libdeflate_free_decompressor(d);
@@ -416,6 +421,7 @@ void read_PacketExistingPlayer(void* data, int len) {
 	if(p->player_id < PLAYERS_MAX) {
 		if(!players[p->player_id].connected)
 			printJoinMsg(p->team, p->name);
+		player_save_corpse(p->player_id);
 		player_reset(&players[p->player_id]);
 		players[p->player_id].connected = 1;
 		players[p->player_id].alive = 1;
@@ -438,6 +444,8 @@ void read_PacketCreatePlayer(void* data, int len) {
 	if(p->player_id < PLAYERS_MAX) {
 		if(!players[p->player_id].connected)
 			printJoinMsg(p->team, p->name);
+		player_save_corpse(p->player_id);
+		log_debug("Player created: id=%i name=%s team=%i", p->player_id, p->name, p->team);
 		player_reset(&players[p->player_id]);
 		players[p->player_id].connected = 1;
 		players[p->player_id].alive = 1;
@@ -486,6 +494,8 @@ void read_PacketCreatePlayer(void* data, int len) {
 void read_PacketPlayerLeft(void* data, int len) {
 	struct PacketPlayerLeft* p = (struct PacketPlayerLeft*)data;
 	if(p->player_id < PLAYERS_MAX) {
+		log_debug("Player left: id=%i name=%s", p->player_id, players[p->player_id].name);
+		player_save_corpse(p->player_id);
 		players[p->player_id].connected = 0;
 		players[p->player_id].alive = 0;
 		players[p->player_id].score = 0;
@@ -499,6 +509,7 @@ void read_PacketPlayerLeft(void* data, int len) {
 
 void read_PacketMapStart(void* data, int len) {
 	if(demo_is_seeking()) return;
+	player_clear_corpses();
 	// ffs someone fix the wrong map size of 1.5mb
 	if(compressed_chunk_data) {
 		free(compressed_chunk_data);
@@ -509,6 +520,7 @@ void read_PacketMapStart(void* data, int len) {
 	CHECK_ALLOCATION_ERROR(compressed_chunk_data)
 	compressed_chunk_data_offset = 0;	network_logged_in = 0;
 	network_map_transfer = 1;
+	network_map_transfer_end = 0;
 	network_map_cached = 0;
 
 	if(len == sizeof(struct PacketMapStart075)) {
@@ -519,12 +531,14 @@ void read_PacketMapStart(void* data, int len) {
 		compressed_chunk_data_estimate = p->map_size;
 		log_info("map name: %s", p->map_name);
 		log_info("map crc32: 0x%08X", p->crc32);
+		log_debug("Map transfer started: name=%s, crc=0x%08X, size=%i", p->map_name, p->crc32, p->map_size);
 		char filename[128];
 		sprintf(filename, "cache/%02X%02X%02X%02X.vxl", red(p->crc32), green(p->crc32), blue(p->crc32),
 				alpha(p->crc32));
 		log_info("%s", filename);
 		if(file_exists(filename)) {
 			network_map_cached = 1;
+			log_debug("Map cache hit: loading from %s", filename);
 			void* mapd = file_load(filename);
 			map_vxl_load(mapd, file_size(filename));
 			free(mapd);
@@ -663,6 +677,8 @@ void read_PacketKillAction(void* data, int len) {
 		players[p->player_id].alive = 0;
 		players[p->player_id].input.keys.packed = 0;
 		players[p->player_id].input.buttons.packed = 0;
+		player_save_corpse(p->player_id);
+		log_debug("Player %i killed by %i (type %i)", p->player_id, p->killer_id, p->kill_type);
 		if(p->player_id != p->killer_id) {
 			players[p->killer_id].score++;
 		}
@@ -1061,6 +1077,8 @@ void network_disconnect() {
 		enet_peer_disconnect(peer, 0);
 		network_connected = 0;
 		network_logged_in = 0;
+		network_map_transfer_end = 0;
+		player_clear_corpses();
 		/* Belt-and-braces: the live chat ring belongs to the just-closed
 		   session. server_c also calls chat_clear on the next connect,
 		   but clearing here too prevents any UI that runs in the
@@ -1103,6 +1121,7 @@ int network_connect_sub(char* ip, int port, int version) {
 		strncpy(network_current_ip, ip, sizeof(network_current_ip) - 1);
 		network_current_ip[sizeof(network_current_ip) - 1] = 0;
 		network_current_port = port;
+		log_debug("Connected to %s:%i (version %i)", ip, port, version);
 
 		float start = window_time();
 		while(window_time() - start < 1.0F) { // listen connection for 1s, check if server disconnects
@@ -1114,6 +1133,7 @@ int network_connect_sub(char* ip, int port, int version) {
 		return 1;
 	}
 	chat_showpopup("No response", 3.0F, rgb(255, 0, 0));
+	log_debug("Connection to %s:%i failed: no response from server", ip, port);
 	enet_peer_reset(peer);
 	return 0;
 }
@@ -1213,6 +1233,8 @@ int network_update() {
 					event.peer->data = NULL;
 					network_connected = 0;
 					network_logged_in = 0;
+					network_map_transfer_end = 0;
+					player_clear_corpses();
 					return 0;
 			}
 		}

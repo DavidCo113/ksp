@@ -87,6 +87,7 @@ extern int network_logged_in;
 extern char network_current_ip[64];
 extern int  network_current_port;
 extern int network_map_transfer;
+extern int network_map_transfer_end;
 extern int network_received_packets;
 
 extern float network_pos_update;
