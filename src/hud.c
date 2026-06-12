@@ -3431,10 +3431,18 @@ static void hud_ingame_touch(void* finger, int action, float x, float y, float d
 			return;
 		}
 		if(camera_mode == CAMERAMODE_BODYVIEW && action == TOUCH_UP) {
-			if(x < settings.window_width / 2)
+			/* A tap is a click, not a hold: button_map[] in
+			   hud_ingame_mouseclick() latches on PRESS and only clears on
+			   RELEASE, so an unpaired PRESS here left the trigger held
+			   forever — the player would respawn firing nonstop. */
+			if(x < settings.window_width / 2) {
 				hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_LMB, WINDOW_PRESS, 0);
-			if(x > settings.window_width / 2)
+				hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_LMB, WINDOW_RELEASE, 0);
+			}
+			if(x > settings.window_width / 2) {
 				hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_RMB, WINDOW_PRESS, 0);
+				hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_RMB, WINDOW_RELEASE, 0);
+			}
 			return;
 		}
 		if(chat_input_mode == CHAT_NO_INPUT && f->start.x < settings.window_width * 0.4F

@@ -787,10 +787,20 @@ void window_update() {
 				}
 
 				if(f && (f == aim_finger || f == aim_finger2)) {
-					if(f == aim_finger) {
-						aim_finger = aim_finger2;
+					if(f == aim_finger2) {
+						/* The matching FINGERDOWN sent RMB PRESS; without a
+						   RELEASE here button_map[1] stays latched (stuck
+						   block-line drag / spade secondary). The ADS scope
+						   toggle itself happens on PRESS, so releasing does
+						   not un-scope. */
+						hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_RMB, WINDOW_RELEASE, 0);
 						aim_finger2 = NULL;
-					} else if(f == aim_finger2) {
+					} else if(f == aim_finger) {
+						/* The secondary finger is promoted to primary look
+						   finger; its RMB hold conceptually ends here too. */
+						if(aim_finger2)
+							hud_ingame_mouseclick(0, 0, WINDOW_MOUSE_RMB, WINDOW_RELEASE, 0);
+						aim_finger = aim_finger2;
 						aim_finger2 = NULL;
 					}
 					break;
