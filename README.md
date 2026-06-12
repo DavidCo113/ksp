@@ -1,7 +1,8 @@
 # KyroSpades (Enhanced ButterSpades)
 This project is a modified fork of [ButterSpades](https://github.com/utf-4096/butterspades), introducing several quality-of-life improvements and visual enhancements. Link: https://github.com/Kyrope01/KyroSpades
+Compiled [releases](https://github.com/Kyrope01/KyroSpades/releases/tag/release) available for: Android, Windows, MacOS, Linux.
 KyroSpades Discord server: https://discord.gg/FM7vSxtug4
-#### Date of latest update: 8th June, 2026
+#### Date of latest update: 12th June, 2026
 
 ## New Features
 | Feature | Description |
