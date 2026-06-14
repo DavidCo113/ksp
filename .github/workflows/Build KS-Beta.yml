@@ -67,6 +67,7 @@ jobs:
           sed -i '1s/^/#include <sys\/stat.h>\n/' src/texture.c || true
           sed -i 's/if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {/struct stat st; char _stat_path[512]; snprintf(_stat_path, sizeof(_stat_path), "%s\/%s", bg_folder, entry->d_name); stat(_stat_path, \&st); if(S_ISREG(st.st_mode)) {/g' src/texture.c || true
           sed -i 's/mkdir(dir_path, 0755)/mkdir(dir_path)/' src/demo.c || true
+          # ← NEW: Add sys/stat.h for skins.c and replace d_type check
           sed -i '1s/^/#include <sys\/stat.h>\n/' src/skins.c || true
           sed -i 's/if(entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN) {/struct stat st; char _stat_path[512]; snprintf(_stat_path, sizeof(_stat_path), "kv6\/%s", entry->d_name); stat(_stat_path, \&st); if(S_ISREG(st.st_mode)) {/g' src/skins.c || true
 
@@ -91,7 +92,7 @@ jobs:
         shell: msys2 {0}
         run: |
           cd build
-          zip -r "KS-Beta Windows.zip" KyroSpades/
+          zip -r "KS Windows Beta.zip" KyroSpades/
 
       # --- LINUX ONLY BUILD STEPS ---
       - name: Install dependencies (Linux)
@@ -112,7 +113,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           cd build
-          zip -r "KS-Beta Linux.zip" KyroSpades/
+          zip -r "KS Linux Beta.zip" KyroSpades/
 
       # --- MACOS ONLY BUILD STEPS (x86_64, targets macOS 11.0+) ---
       - name: Cache source-built macOS deps
@@ -207,7 +208,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           cd build
-          zip -r "KS-Beta MacOS.zip" KyroSpades/
+          zip -r "KS macOS Beta.zip" KyroSpades/
 
       # --- UPLOAD ARTIFACTS ---
       - name: Upload artifact
@@ -345,7 +346,7 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p build
-          cp android/app/build/outputs/apk/release/*.apk "build/KS-Beta Android.apk"
+          cp android/app/build/outputs/apk/release/*.apk "build/KS Android Beta.apk"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -368,20 +369,19 @@ jobs:
           merge-multiple: true
           path: release-artifacts
 
-      - name: Get date for release tag
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
       - name: Upload as GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: KS-Beta
-          name: KyroSpades Beta
+          tag_name: beta
+          name: Latest KS Beta
+          prerelease: true
           files: |
-            release-artifacts/KS-Beta Windows.zip
-            release-artifacts/KS-Beta Linux.zip
-            release-artifacts/KS-Beta MacOS.zip
-            release-artifacts/KS-Beta Android.apk
-          body: Latest version of KyroSpades Beta compiled for Windows, Linux, and macOS.
+            release-artifacts/KS Windows Beta.zip
+            release-artifacts/KS Linux Beta.zip
+            release-artifacts/KS macOS Beta.zip
+            release-artifacts/KS Android Beta.apk
+          body: |
+            Latest beta versions of KyroSpades compiled for Windows, Linux, macOS, and Android.
+            This is an unstable pre-release build.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
