@@ -309,8 +309,12 @@ jobs:
 
       - name: Package game assets into the APK project
         run: |
-          chmod +x package_android_assets.sh
-          ./package_android_assets.sh
+          if [ ! -f "$GITHUB_WORKSPACE/package_android_assets.sh" ]; then
+            echo "::error::package_android_assets.sh not found — make sure it is committed to the repo."
+            exit 1
+          fi
+          chmod +x "$GITHUB_WORKSPACE/package_android_assets.sh"
+          "$GITHUB_WORKSPACE/package_android_assets.sh"
 
       - name: Cache Gradle
         uses: actions/cache@v4
