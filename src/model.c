@@ -22,6 +22,7 @@
 #include <math.h>
 
 #include "common.h"
+#include "glx.h"
 #include "player.h"
 #include "file.h"
 #include "camera.h"
@@ -375,6 +376,9 @@ static void greedy_mesh(struct kv6_t* kv6, struct kv6_voxel* voxel, uint8_t* mar
 }
 
 static int kv6_program = -1;
+#if defined(OPENGL_ES)
+static int kv6_program_es2 = -1;
+#endif
 void kv6_render(struct kv6_t* kv6, unsigned char team) {
 	if(!kv6)
 		return;
@@ -475,7 +479,7 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 			glEnable(GL_LIGHTING);
 			glEnable(GL_LIGHT0);
 			glEnable(GL_COLOR_MATERIAL);
-#ifndef OPENGL_ES
+#if !defined(OPENGL_ES) || gles_version < 2
 			glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
 #endif
 			glEnable(GL_NORMALIZE);
@@ -493,10 +497,12 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 			glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_ALPHA, GL_SRC_ALPHA);
 			glBindTexture(GL_TEXTURE_2D, texture_dummy.texture_id);
 
-			if(kv6->colorize) {
-				glEnable(GL_TEXTURE_2D);
-				glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, (float[]) {kv6->red, kv6->green, kv6->blue, 1.0F});
-			}
+		if(kv6->colorize) {
+#if !defined(OPENGL_ES)
+			glEnable(GL_TEXTURE_2D);
+#endif
+			glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, (float[]) {kv6->red, kv6->green, kv6->blue, 1.0F});
+		}
 
 			matrix_push(matrix_model);
 			matrix_scale3(matrix_model, kv6->scale);
@@ -505,8 +511,10 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 
 			glx_displaylist_draw(kv6->display_list + 0, GLX_DISPLAYLIST_NORMAL);
 
-			if(!kv6->colorize)
-				glEnable(GL_TEXTURE_2D);
+		if(!kv6->colorize)
+#if !defined(OPENGL_ES)
+			glEnable(GL_TEXTURE_2D);
+#endif
 
 			switch(team) {
 				case TEAM_1:
@@ -528,9 +536,11 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 
 			matrix_pop(matrix_model);
 
-			glBindTexture(GL_TEXTURE_2D, 0);
-			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-			glDisable(GL_TEXTURE_2D);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+#if !defined(OPENGL_ES)
+		glDisable(GL_TEXTURE_2D);
+#endif
 
 			glDisable(GL_NORMALIZE);
 			glDisable(GL_COLOR_MATERIAL);
@@ -581,6 +591,40 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 								   normals[1], NULL);
 
 			if(kv6_program < 0) {
+#if defined(OPENGL_ES)
+				if(gles_version >= 2) {
+					/* ES 2.0 KV6 shader: replace gl_ built-in attributes with user attributes */
+					kv6_program_es2
+						= glx_shader("attribute vec3 a_Position;\n"
+									 "attribute vec4 a_Color;\n"
+									 "attribute vec3 a_Normal;\n"
+									 "uniform float size;\n"
+									 "uniform vec3 fog;\n"
+									 "uniform vec3 camera;\n"
+									 "uniform mat4 model;\n"
+									 "uniform mat4 u_MVP;\n"
+									 "uniform float dist_factor;\n"
+									 "varying vec4 v_Color;\n"
+									 "void main(void) {\n"
+									 "    gl_Position = u_MVP * vec4(a_Position, 1.0);\n"
+									 "    float dist = length((model * vec4(a_Position, 1.0)).xz - camera.xz) * dist_factor;\n"
+									 "    vec3 N = normalize(model * vec4(a_Normal, 0.0)).xyz;\n"
+									 "    vec3 L = normalize(vec3(0.0, -1.0, 1.0));\n"
+									 "    float d = clamp(dot(N, L), 0.0, 1.0) * 0.5 + 0.5;\n"
+									 "    v_Color = mix(vec4(d, d, d, 1.0) * a_Color, vec4(fog, 1.0), min(dist, 1.0));\n"
+									 "    gl_PointSize = size / gl_Position.w;\n"
+									 "}\n",
+									 "precision mediump float;\n"
+									 "varying vec4 v_Color;\n"
+									 "void main(void) {\n"
+									 "    gl_FragColor = v_Color;\n"
+									 "}\n");
+				if(kv6_program_es2)
+					log_info("KV6 ES 2.0 shader compiled (program %u)", kv6_program_es2);
+				kv6_program = 0;
+				}
+#endif
+#ifndef OPENGL_ES
 				kv6_program
 					= glx_shader("uniform float size;\n"
 								 "uniform vec3 fog;\n"
@@ -599,6 +643,7 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 								 "void main(void) {\n"
 								 "	gl_FragColor = gl_Color;\n"
 								 "}\n");
+#endif
 			}
 		}
 
@@ -609,22 +654,36 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 		float len_y = len3D(matrix_model[0][1], matrix_model[1][1], matrix_model[2][1]);
 		float len_z = len3D(matrix_model[0][2], matrix_model[1][2], matrix_model[2][2]);
 
-#ifndef OPENGL_ES
-		if(!glx_version)
+#if defined(OPENGL_ES)
+		if(gles_version >= 2) {
+			/* ES 2.0: use KV6 shader with vertex attributes */
+			int prog = kv6_program_es2;
+			if(prog) {
+				mat4 mv, mvp;
+				glmc_mat4_mul(matrix_view, matrix_model, mv);
+				glmc_mat4_mul(matrix_projection, mv, mvp);
+				glUseProgram(prog);
+				glUniform1f(glGetUniformLocation(prog, "dist_factor"),
+							glx_fog ? 1.0F / settings.render_distance : 0.0F);
+				glUniform1f(glGetUniformLocation(prog, "size"),
+							1.414F * near_plane_height * kv6->scale * (len_x + len_y + len_z) / 3.0F);
+				glUniform3f(glGetUniformLocation(prog, "fog"), fog_color[0], fog_color[1], fog_color[2]);
+				glUniform3f(glGetUniformLocation(prog, "camera"), camera_x, camera_y, camera_z);
+				glUniformMatrix4fv(glGetUniformLocation(prog, "model"), 1, 0, (float*)matrix_model);
+				glUniformMatrix4fv(glGetUniformLocation(prog, "u_MVP"), 1, GL_FALSE, (float*)mvp);
+			}
+		} else {
 #endif
-		{
+		if(!glx_version) {
 			glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, (float[]) {0.0F, 0.0F, 1.0F});
 			glPointSize(1.414F * near_plane_height * kv6->scale * (len_x + len_y + len_z) / 3.0F);
 			glEnable(GL_LIGHTING);
 			glEnable(GL_LIGHT0);
 			glEnable(GL_COLOR_MATERIAL);
-#ifndef OPENGL_ES
 			glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
-#endif
 			glEnable(GL_NORMALIZE);
 		}
 
-#ifndef OPENGL_ES
 		if(glx_version) {
 			glEnable(GL_PROGRAM_POINT_SIZE);
 			glUseProgram(kv6_program);
@@ -635,6 +694,8 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 			glUniform3f(glGetUniformLocation(kv6_program, "fog"), fog_color[0], fog_color[1], fog_color[2]);
 			glUniform3f(glGetUniformLocation(kv6_program, "camera"), camera_x, camera_y, camera_z);
 			glUniformMatrix4fv(glGetUniformLocation(kv6_program, "model"), 1, 0, (float*)matrix_model);
+		}
+#if defined(OPENGL_ES)
 		}
 #endif
 		if(settings.multisamples)
@@ -659,21 +720,29 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 
 		if(settings.multisamples)
 			glEnable(GL_MULTISAMPLE);
-#ifndef OPENGL_ES
+#if defined(OPENGL_ES)
+		if(gles_version >= 2) {
+			if(kv6_program_es2)
+				glUseProgram(0);
+		} else {
+#endif
 		if(glx_version) {
 			glUseProgram(0);
 			glDisable(GL_PROGRAM_POINT_SIZE);
 		}
+#if defined(OPENGL_ES)
+		}
 #endif
 
-#ifndef OPENGL_ES
-		if(!glx_version)
+#if defined(OPENGL_ES)
+		if(gles_version < 2) {
 #endif
-		{
-			glDisable(GL_NORMALIZE);
-			glDisable(GL_COLOR_MATERIAL);
-			glDisable(GL_LIGHT0);
-			glDisable(GL_LIGHTING);
+		glDisable(GL_NORMALIZE);
+		glDisable(GL_COLOR_MATERIAL);
+		glDisable(GL_LIGHT0);
+		glDisable(GL_LIGHTING);
+#if defined(OPENGL_ES)
 		}
+#endif
 	}
 }

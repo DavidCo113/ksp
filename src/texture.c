@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "common.h"
+#include "glx.h"
 #include "texture.h"
 #include "map.h"
 #include "log.h"
@@ -183,14 +184,32 @@ void texture_delete(struct texture* t) {
 }
 
 void texture_draw_sector(struct texture* t, float x, float y, float w, float h, float u, float v, float us, float vs) {
-	/* State-leak guard: world / tesselator / KV6 model rendering may leave
-	   GL_COLOR_ARRAY or GL_NORMAL_ARRAY enabled with stale pointers, which in
-	   fixed-function GL silently overrides glColor3ub / glColor4f for every
-	   vertex (tinted HUD textures, black minimap). Force them off and restore
-	   standard MODULATE in case GL_TEXTURE_ENV_MODE was left as GL_COMBINE.
-	   Runs on all platforms deliberately: the same latent leak exists on
-	   desktop GL, and the cost of a few redundant state calls per HUD draw is
-	   negligible. */
+#if defined(OPENGL_ES)
+	if(gles_version >= 2) {
+		glx_use_default_shader();
+		glUniform4fv(glGetUniformLocation(glx_default_shader_program(), "u_Color"), 1, gles_current_color);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_HasVertexColor"), 0.0F);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TextureEnabled"), 1.0F);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TexCoordScale"), 1.0F);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, t->texture_id);
+		glUniform1i(glGetUniformLocation(glx_default_shader_program(), "u_Texture"), 0);
+
+		float vertices[12] = {x, y, x, y - h, x + w, y - h, x, y, x + w, y - h, x + w, y};
+		float texcoords[12] = {u, v, u, v + vs, u + us, v + vs, u, v, u + us, v + vs, u + us, v};
+
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
+		glEnableVertexAttribArray(2);
+
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(2);
+		return;
+	}
+#endif
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_NORMAL_ARRAY);
 	glActiveTexture(GL_TEXTURE0);
@@ -229,7 +248,7 @@ void texture_draw(struct texture* t, float x, float y, float w, float h) {
 
 void texture_draw_shadow(struct texture* t, float x, float y, float w, float h) {
 	float color[4];
-	glGetFloatv(GL_CURRENT_COLOR, color);
+	glx_get_current_color(color);
 
 	glColor4f(0.F, 0.F, 0.F, 1.F);
 	texture_draw(t, x, y - 1.F, w, h);
@@ -251,9 +270,29 @@ void texture_draw_rotated(struct texture* t, float x, float y, float w, float h,
 }
 
 void texture_draw_empty(float x, float y, float w, float h) {
-	/* See note in texture_draw_sector: defensively disable leaked client
-	   arrays so glColor3ub / glColor4f at the call site actually takes
-	   effect (otherwise stale per-vertex color is used). */
+#if defined(OPENGL_ES)
+	if(gles_version >= 2) {
+		glx_use_default_shader();
+		glUniform4fv(glGetUniformLocation(glx_default_shader_program(), "u_Color"), 1, gles_current_color);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_HasVertexColor"), 0.0F);
+
+		float vertices[12] = {x, y, x, y - h, x + w, y - h, x, y, x + w, y - h, x + w, y};
+		float texcoords[12] = {0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.0F};
+
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
+		glEnableVertexAttribArray(2);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TextureEnabled"), 1.0F);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TexCoordScale"), 1.0F);
+
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(2);
+		return;
+	}
+#endif
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_NORMAL_ARRAY);
 	glActiveTexture(GL_TEXTURE0);
@@ -273,7 +312,32 @@ void texture_draw_empty(float x, float y, float w, float h) {
 #define texture_emit_rotated(tx, ty, x, y, a) cos(a) * (x)-sin(a) * (y) + (tx), sin(a) * (x) + cos(a) * (y) + (ty)
 
 void texture_draw_empty_rotated(float x, float y, float w, float h, float angle) {
-	/* See note in texture_draw_sector. */
+#if defined(OPENGL_ES)
+	if(gles_version >= 2) {
+		glx_use_default_shader();
+		glUniform4fv(glGetUniformLocation(glx_default_shader_program(), "u_Color"), 1, gles_current_color);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_HasVertexColor"), 0.0F);
+
+		float vertices[12]
+			= {texture_emit_rotated(x, y, -w / 2, h / 2, angle), texture_emit_rotated(x, y, -w / 2, -h / 2, angle),
+			   texture_emit_rotated(x, y, w / 2, -h / 2, angle), texture_emit_rotated(x, y, -w / 2, h / 2, angle),
+			   texture_emit_rotated(x, y, w / 2, -h / 2, angle), texture_emit_rotated(x, y, w / 2, h / 2, angle)};
+		float texcoords[12] = {0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 0.0F};
+
+		glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
+		glEnableVertexAttribArray(2);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TextureEnabled"), 1.0F);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TexCoordScale"), 1.0F);
+
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(2);
+		return;
+	}
+#endif
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_NORMAL_ARRAY);
 	glActiveTexture(GL_TEXTURE0);

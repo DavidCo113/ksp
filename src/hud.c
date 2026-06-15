@@ -30,6 +30,7 @@
 #include "main.h"
 #include "file.h"
 #include "common.h"
+#include "glx.h"
 #include "list.h"
 #include "matrix.h"
 #include "texture.h"
@@ -835,7 +836,7 @@ static inline void hud_font_render(float x, float y, float h, char* text, float 
 
 static inline void hud_font_render_outlined(float x, float y, float h, char* text, float a) {
 	float color[4];
-	glGetFloatv(GL_CURRENT_COLOR, color);
+	glx_get_current_color(color);
 	glColor4f(0.F, 0.F, 0.F, a);
 	font_render(x - 1.F, y, h, text);
 	font_render(x + 1.F, y, h, text);
@@ -928,12 +929,8 @@ glColor3ub(settings.chat_mention_r, settings.chat_mention_g, settings.chat_menti
 glColor3ub(red(chat_color[channel][idx]), green(chat_color[channel][idx]), blue(chat_color[channel][idx]));
 }
 glLineWidth(3);
-glBegin(GL_LINES);
-
-glVertex2f(x - 11.F, y + settings.chat_spacing / 2.F + 1.F);
-glVertex2f(x - 11.F, floor(y - 16.F - settings.chat_spacing / 2 + 1.F));
-
-glEnd();
+glx_draw_line_2d(x - 11.F, y + settings.chat_spacing / 2.F + 1.F,
+                  x - 11.F, floor(y - 16.F - settings.chat_spacing / 2 + 1.F));
 glLineWidth(1);
 glColor3ub(255, 255, 255);
 }
@@ -999,19 +996,19 @@ static void demo_playback_render_overlay(float scalef) {
 		? (DemoPlaybackState.current_time / DemoPlaybackState.duration) : 0.0f;
 	if(progress < 0.0f) progress = 0.0f;
 	if(progress > 1.0f) progress = 1.0f;
-	glDisable(GL_TEXTURE_2D); glEnable(GL_BLEND);
+#if !defined(OPENGL_ES)
+	glDisable(GL_TEXTURE_2D);
+#endif
+	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glColor4f(0.0f, 0.0f, 0.0f, 0.55f);
-	glBegin(GL_QUADS);
-		glVertex2f(bar_x, bar_y); glVertex2f(bar_x + bar_w, bar_y);
-		glVertex2f(bar_x + bar_w, bar_y + bar_h); glVertex2f(bar_x, bar_y + bar_h);
-	glEnd();
+	glx_draw_quad_2d(bar_x, bar_y, bar_w, bar_h);
 	glColor4f(0.25f, 0.72f, 1.0f, 0.85f);
-	glBegin(GL_QUADS);
-		glVertex2f(bar_x, bar_y); glVertex2f(bar_x + bar_w * progress, bar_y);
-		glVertex2f(bar_x + bar_w * progress, bar_y + bar_h); glVertex2f(bar_x, bar_y + bar_h);
-	glEnd();
-	glDisable(GL_BLEND); glEnable(GL_TEXTURE_2D);
+	glx_draw_quad_2d(bar_x, bar_y, bar_w * progress, bar_h);
+	glDisable(GL_BLEND);
+#if !defined(OPENGL_ES)
+	glEnable(GL_TEXTURE_2D);
+#endif
 	int cur_m = (int)(DemoPlaybackState.current_time)/60, cur_s = (int)(DemoPlaybackState.current_time)%60;
 	int dur_m = (int)(DemoPlaybackState.duration)/60, dur_s = (int)(DemoPlaybackState.duration)%60;
 	char buf[80];
@@ -1804,12 +1801,7 @@ static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
 						color = mu_accent_color(1.F, 255);
 						glColor4ub(color.r, color.g, color.b, color.a);
 						glLineWidth(3);
-						glBegin(GL_LINES);
-
-						glVertex2f(3.0F, 90.F);
-						glVertex2f(chat_width + 19.F, 90.F);
-
-						glEnd();
+						glx_draw_line_2d(3.0F, 90.F, chat_width + 19.F, 90.F);
 					}
 
 
@@ -2263,12 +2255,8 @@ texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent2_x * map_
 		color = mu_accent_color(1.F, 255);
 		glColor3ub(color.r, color.g, color.b);
 		glLineWidth(3);
-		glBegin(GL_LINES);
-
-		glVertex2f(settings.window_width - 5.F, floor(settings.window_height / 2.F - 18.F + 84.F));
-		glVertex2f(settings.window_width - 5.F, floor(settings.window_height / 2.F - 18.F + 48.F));
-
-		glEnd();
+		glx_draw_line_2d(settings.window_width - 5.F, floor(settings.window_height / 2.F - 18.F + 84.F),
+		                  settings.window_width - 5.F, floor(settings.window_height / 2.F - 18.F + 48.F));
 		glLineWidth(1);
 		glColor3ub(255, 255, 255);
 		glDisable(GL_BLEND);

@@ -284,7 +284,7 @@ void display() {
 		glClearColor(fog_color[0], fog_color[1], fog_color[2], fog_color[3]);
 	}
 
-	int needs_postproc = (glx_version && (settings.exposure != 0 || settings.saturation != 0 || settings.contrast != 0 || settings.vignette != 0));
+	int needs_postproc = ((glx_version || gles_version >= 2) && (settings.exposure != 0 || settings.saturation != 0 || settings.contrast != 0 || settings.vignette != 0));
 
 	if(hud_active->render_world || network_connected) {
 		if(needs_postproc) {
@@ -313,7 +313,13 @@ void display() {
 				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postproc.texture, 0);
 				glGenRenderbuffers(1, &postproc.depth_rb);
 				glBindRenderbuffer(GL_RENDERBUFFER, postproc.depth_rb);
-				glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, settings.window_width, settings.window_height);
+				glRenderbufferStorage(GL_RENDERBUFFER,
+#ifdef OPENGL_ES
+					GL_DEPTH_COMPONENT16,
+#else
+					GL_DEPTH_COMPONENT,
+#endif
+					settings.window_width, settings.window_height);
 				glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, postproc.depth_rb);
 				if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 					glDeleteFramebuffers(1, &postproc.fbo);
@@ -331,6 +337,41 @@ void display() {
 			postproc.h = settings.window_height;
 
 			if(!postproc.shader) {
+#if defined(OPENGL_ES)
+				if(gles_version >= 2) {
+					const char* vert =
+						"attribute vec2 a_Position;\n"
+						"attribute vec2 a_TexCoord;\n"
+						"varying vec2 v_TexCoord;\n"
+						"void main(){\n"
+						"    v_TexCoord = a_TexCoord;\n"
+						"    gl_Position = vec4(a_Position, 0.0, 1.0);\n"
+						"}\n";
+					const char* frag =
+						"precision mediump float;\n"
+						"varying vec2 v_TexCoord;\n"
+						"uniform float exposure;\n"
+						"uniform float saturation;\n"
+						"uniform float contrast;\n"
+						"uniform float vignette;\n"
+						"uniform sampler2D tex;\n"
+						"void main(){\n"
+						"    vec4 c = texture2D(tex, v_TexCoord);\n"
+						"    float e = 1.0 + exposure / 100.0;\n"
+						"    c.rgb *= e;\n"
+						"    float g = dot(c.rgb, vec3(0.299, 0.587, 0.114));\n"
+						"    float s = 1.0 + saturation / 100.0;\n"
+						"    c.rgb = mix(vec3(g), c.rgb, s);\n"
+						"    float ct = 1.0 + contrast / 100.0;\n"
+						"    c.rgb = (c.rgb - 0.5) * ct + 0.5;\n"
+						"    float vig = 1.0 - (vignette / 100.0) * dot(v_TexCoord - 0.5, v_TexCoord - 0.5) * 4.0;\n"
+						"    c.rgb *= clamp(vig, 0.0, 1.0);\n"
+						"    c.rgb = clamp(c.rgb, 0.0, 1.0);\n"
+						"    gl_FragColor = c;\n"
+						"}\n";
+					postproc.shader = glx_shader(vert, frag);
+				} else {
+#endif
 				const char* vert = "void main(){gl_TexCoord[0]=gl_MultiTexCoord0;gl_Position=ftransform();}";
 				const char* frag =
 					"uniform float exposure;"
@@ -352,6 +393,9 @@ void display() {
 					"c.rgb=clamp(c.rgb,0.0,1.0);"
 					"gl_FragColor=c;}";
 				postproc.shader = glx_shader(vert, frag);
+#if defined(OPENGL_ES)
+				}
+#endif
 				if(postproc.shader) {
 					postproc.uni_exposure = glGetUniformLocation(postproc.shader, "exposure");
 					postproc.uni_saturation = glGetUniformLocation(postproc.shader, "saturation");
@@ -614,13 +658,15 @@ void display() {
 				glDisable(GL_FOG);
 
 			if(needs_postproc) {
-				glMatrixMode(GL_PROJECTION);
-				glPushMatrix();
-				glLoadIdentity();
-				glOrtho(0.0, settings.window_width, 0.0, settings.window_height, -1.0, 1.0);
-				glMatrixMode(GL_MODELVIEW);
-				glPushMatrix();
-				glLoadIdentity();
+				mat4 saved_proj2, saved_view2, saved_model2;
+				memcpy(saved_proj2, matrix_projection, sizeof(mat4));
+				memcpy(saved_view2, matrix_view, sizeof(mat4));
+				memcpy(saved_model2, matrix_model, sizeof(mat4));
+				matrix_ortho(matrix_projection, 0.0, settings.window_width, 0.0, settings.window_height, -1.0, 1.0);
+				matrix_identity(matrix_view);
+				matrix_identity(matrix_model);
+				matrix_upload_p();
+				matrix_upload();
 
 				glDisable(GL_DEPTH_TEST);
 				glDepthMask(GL_FALSE);
@@ -641,12 +687,21 @@ void display() {
 					glUniform1f(postproc.uni_contrast, settings.contrast);
 					glUniform1f(postproc.uni_vignette, settings.vignette);
 
+#if defined(OPENGL_ES)
+					if(gles_version >= 2) {
+						glUniform1i(glGetUniformLocation(postproc.shader, "tex"), 0);
+						glx_draw_screen_quad();
+					} else {
+#else
 					glBegin(GL_QUADS);
 					glTexCoord2f(0.0F, 0.0F); glVertex2f(0.0F, 0.0F);
 					glTexCoord2f(1.0F, 0.0F); glVertex2f((float)settings.window_width, 0.0F);
 					glTexCoord2f(1.0F, 1.0F); glVertex2f((float)settings.window_width, (float)settings.window_height);
 					glTexCoord2f(0.0F, 1.0F); glVertex2f(0.0F, (float)settings.window_height);
 					glEnd();
+#if defined(OPENGL_ES)
+					}
+#endif
 
 					glUseProgram(0);
 				}
@@ -656,10 +711,11 @@ void display() {
 				glClear(GL_DEPTH_BUFFER_BIT);
 				glEnable(GL_DEPTH_TEST);
 
-				glMatrixMode(GL_PROJECTION);
-				glPopMatrix();
-				glMatrixMode(GL_MODELVIEW);
-				glPopMatrix();
+				memcpy(matrix_projection, saved_proj2, sizeof(mat4));
+				memcpy(matrix_view, saved_view2, sizeof(mat4));
+				memcpy(matrix_model, saved_model2, sizeof(mat4));
+				matrix_upload_p();
+				matrix_upload();
 			}
 		}
 		if(needs_postproc && network_map_transfer && postproc.fbo) {
@@ -780,21 +836,23 @@ void display() {
 			float y = (float)settings.window_height - margin * ease;
 			float alpha = t <= fade_start ? 1.0F : 1.0F - (t - fade_start) / (1.0F - fade_start);
 
-			glEnable(GL_BLEND);
-			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-			glEnable(GL_TEXTURE_2D);
-			glBindTexture(GL_TEXTURE_2D, screenshot_anim.texture);
-			glColor4f(1.0F, 1.0F, 1.0F, alpha);
-			texture_draw_empty(x, y, w, h);
-			glDisable(GL_TEXTURE_2D);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#if !defined(OPENGL_ES)
+		glEnable(GL_TEXTURE_2D);
+#endif
+		glBindTexture(GL_TEXTURE_2D, screenshot_anim.texture);
+		glColor4f(1.0F, 1.0F, 1.0F, alpha);
+		texture_draw_empty(x, y, w, h);
+#if !defined(OPENGL_ES)
+		glDisable(GL_TEXTURE_2D);
+#endif
 			glLineWidth(2.0F);
 			glColor4f(1.0F, 1.0F, 1.0F, alpha);
-			glBegin(GL_LINE_LOOP);
-			glVertex2f(x, y);
-			glVertex2f(x + w, y);
-			glVertex2f(x + w, y - h);
-			glVertex2f(x, y - h);
-			glEnd();
+			glx_draw_line_2d(x, y, x + w, y);
+			glx_draw_line_2d(x + w, y, x + w, y - h);
+			glx_draw_line_2d(x + w, y - h, x, y - h);
+			glx_draw_line_2d(x, y - h, x, y);
 			glBindTexture(GL_TEXTURE_2D, 0);
 			glDisable(GL_BLEND);
 		}

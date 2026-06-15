@@ -22,6 +22,7 @@
 #include <assert.h>
 
 #include "common.h"
+#include "glx.h"
 #include "tesselator.h"
 
 static size_t vertex_type_size(enum tesselator_vertex_type type) {
@@ -108,6 +109,51 @@ void tesselator_free(struct tesselator* t) {
 }
 
 void tesselator_draw(struct tesselator* t, int with_color) {
+#if defined(OPENGL_ES)
+	if(gles_version >= 2) {
+		glx_use_default_shader();
+		glUniform4fv(glGetUniformLocation(glx_default_shader_program(), "u_Color"), 1, gles_current_color);
+		glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_HasVertexColor"), with_color ? 1.0F : 0.0F);
+
+		switch(t->vertex_type) {
+			case VERTEX_INT:
+				glVertexAttribPointer(0, 3, GL_SHORT, GL_FALSE, 0, t->vertices);
+				break;
+			case VERTEX_FLOAT:
+				glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, t->vertices);
+				break;
+		}
+		glEnableVertexAttribArray(0);
+
+		if(with_color) {
+			glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, 0, t->colors);
+			glEnableVertexAttribArray(1);
+		}
+
+		if(t->has_normal) {
+			glVertexAttribPointer(3, 3, GL_BYTE, GL_FALSE, 0, t->normals);
+			glEnableVertexAttribArray(3);
+		}
+
+		if(t->texcoords) {
+			glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, t->texcoords);
+			glEnableVertexAttribArray(2);
+			glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TextureEnabled"), 1.0F);
+			/* Reset texcoord scale — font rendering sets 1/8192 */
+			glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TexCoordScale"), 1.0F);
+		} else {
+			glUniform1f(glGetUniformLocation(glx_default_shader_program(), "u_TextureEnabled"), 0.0F);
+		}
+
+		glDrawArrays(GL_TRIANGLES, 0, t->quad_count * 6);
+
+		glDisableVertexAttribArray(0);
+		if(with_color) glDisableVertexAttribArray(1);
+		if(t->has_normal) glDisableVertexAttribArray(3);
+		if(t->texcoords) glDisableVertexAttribArray(2);
+		return;
+	}
+#endif
 	glEnableClientState(GL_VERTEX_ARRAY);
 
 	if(t->has_normal) {

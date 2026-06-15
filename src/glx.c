@@ -19,6 +19,10 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+#ifdef OPENGL_ES
+#include <dlfcn.h>
+#endif
 
 #include "common.h"
 #include "camera.h"
@@ -28,15 +32,86 @@
 #include "texture.h"
 #include "glx.h"
 
-// for future opengl-es abstraction layer
-
 int glx_version = 0;
-
 int glx_fog = 0;
+int gles_version = 0;
+float gles_current_color[4] = {1.0F, 1.0F, 1.0F, 1.0F};
+
+/* ── ES 2.0 default shader ──────────────────────────────────────────────── */
+
+#ifdef OPENGL_ES
+static GLuint default_shader = 0;
+static GLint loc_u_MVP = -1;
+static GLint loc_u_Color = -1;
+static GLint loc_u_HasVertexColor = -1;
+static GLint loc_u_TextureEnabled = -1;
+static GLint loc_u_Texture = -1;
+static GLint loc_u_TexCoordScale = -1;
+static GLuint quad_vbo = 0;
+static GLuint line_quad_vbo = 0;
+
+static const char* default_vs =
+	"attribute vec4 a_Position;\n"
+	"attribute vec4 a_Color;\n"
+	"attribute vec2 a_TexCoord;\n"
+	"uniform mat4 u_MVP;\n"
+	"uniform vec4 u_Color;\n"
+	"uniform float u_HasVertexColor;\n"
+	"uniform float u_TexCoordScale;\n"
+	"varying vec4 v_Color;\n"
+	"varying vec2 v_TexCoord;\n"
+	"void main() {\n"
+	"    v_Color = mix(u_Color, a_Color, u_HasVertexColor);\n"
+	"    v_TexCoord = a_TexCoord * u_TexCoordScale;\n"
+	"    gl_Position = u_MVP * a_Position;\n"
+	"}\n";
+
+static const char* default_fs =
+	"precision mediump float;\n"
+	"varying vec4 v_Color;\n"
+	"varying vec2 v_TexCoord;\n"
+	"uniform sampler2D u_Texture;\n"
+	"uniform float u_TextureEnabled;\n"
+	"void main() {\n"
+	"    vec4 tex = texture2D(u_Texture, v_TexCoord);\n"
+	"    gl_FragColor = mix(vec4(1.0), tex, u_TextureEnabled) * v_Color;\n"
+	"}\n";
+#endif
+
+/* ── Color tracking ──────────────────────────────────────────────────────── */
+
+void glx_set_color4f(float r, float g, float b, float a) {
+	gles_current_color[0] = r;
+	gles_current_color[1] = g;
+	gles_current_color[2] = b;
+	gles_current_color[3] = a;
+#ifdef OPENGL_ES
+	if(gles_version < 2) {
+		/* ES 1.1: call real glColor4f via dlsym to avoid macro recursion */
+		static void (*real_glColor4f)(float, float, float, float) = NULL;
+		static int resolved = 0;
+		if(!resolved) {
+			real_glColor4f = (void (*)(float, float, float, float))dlsym(RTLD_DEFAULT, "glColor4f");
+			resolved = 1;
+		}
+		if(real_glColor4f)
+			real_glColor4f(r, g, b, a);
+	}
+#endif
+}
+
+void glx_get_current_color(float* dst) {
+	dst[0] = gles_current_color[0];
+	dst[1] = gles_current_color[1];
+	dst[2] = gles_current_color[2];
+	dst[3] = gles_current_color[3];
+}
+
+/* ── GL version detection ────────────────────────────────────────────────── */
 
 static int glx_major_ver() {
 #ifdef OPENGL_ES
-	return 2;
+	return gles_version;
 #else
 	return atoi(glGetString(GL_VERSION));
 #endif
@@ -46,23 +121,66 @@ void glx_init() {
 #ifndef OPENGL_ES
 	glx_version = glx_major_ver() >= 2;
 #else
-	glx_version = 0;
+	if(gles_version >= 2) {
+		default_shader = glx_shader(default_vs, default_fs);
+		if(default_shader) {
+			loc_u_MVP = glGetUniformLocation(default_shader, "u_MVP");
+			loc_u_Color = glGetUniformLocation(default_shader, "u_Color");
+			loc_u_HasVertexColor = glGetUniformLocation(default_shader, "u_HasVertexColor");
+			loc_u_TextureEnabled = glGetUniformLocation(default_shader, "u_TextureEnabled");
+			loc_u_Texture = glGetUniformLocation(default_shader, "u_Texture");
+			loc_u_TexCoordScale = glGetUniformLocation(default_shader, "u_TexCoordScale");
+			glUseProgram(default_shader);
+			glUniform1i(loc_u_Texture, 0);
+			glUniform4f(loc_u_Color, 1.0F, 1.0F, 1.0F, 1.0F);
+			glUniform1f(loc_u_HasVertexColor, 0.0F);
+			glUniform1f(loc_u_TextureEnabled, 0.0F);
+			glUniform1f(loc_u_TexCoordScale, 1.0F);
+			glUseProgram(0);
+			log_info("GLES 2.0 default shader compiled (program %u)", default_shader);
+		} else {
+			log_error("GLES 2.0 default shader compilation failed");
+		}
+		glx_version = 1;
+	} else {
+		glx_version = 0;
+		log_info("GLES 1.1 fallback path");
+	}
 #endif
 }
 
+/* ── Shader compilation (unified for desktop GL + ES 2.0) ────────────────── */
+
 int glx_shader(const char* vertex, const char* fragment) {
 #ifndef OPENGL_ES
-	int v, f;
+	if(!glx_version)
+		return 0;
+#endif
+	int v = 0, f = 0;
 	if(vertex) {
 		v = glCreateShader(GL_VERTEX_SHADER);
 		glShaderSource(v, 1, (const GLchar* const*)&vertex, NULL);
 		glCompileShader(v);
+		GLint ok;
+		glGetShaderiv(v, GL_COMPILE_STATUS, &ok);
+		if(!ok) {
+			char log[1024];
+			glGetShaderInfoLog(v, sizeof(log), NULL, log);
+			log_error("Vertex shader compile error: %s", log);
+		}
 	}
 
 	if(fragment) {
 		f = glCreateShader(GL_FRAGMENT_SHADER);
 		glShaderSource(f, 1, (const GLchar* const*)&fragment, NULL);
 		glCompileShader(f);
+		GLint ok;
+		glGetShaderiv(f, GL_COMPILE_STATUS, &ok);
+		if(!ok) {
+			char log[1024];
+			glGetShaderInfoLog(f, sizeof(log), NULL, log);
+			log_error("Fragment shader compile error: %s", log);
+		}
 	}
 
 	int program = glCreateProgram();
@@ -70,12 +188,27 @@ int glx_shader(const char* vertex, const char* fragment) {
 		glAttachShader(program, v);
 	if(fragment)
 		glAttachShader(program, f);
+	glBindAttribLocation(program, 0, "a_Position");
+	glBindAttribLocation(program, 1, "a_Color");
+	glBindAttribLocation(program, 2, "a_TexCoord");
+	glBindAttribLocation(program, 3, "a_Normal");
 	glLinkProgram(program);
+
+	GLint linked;
+	glGetProgramiv(program, GL_LINK_STATUS, &linked);
+	if(!linked) {
+		char log[1024];
+		glGetProgramInfoLog(program, sizeof(log), NULL, log);
+		log_error("Shader link error: %s", log);
+	}
+
+	if(v) glDeleteShader(v);
+	if(f) glDeleteShader(f);
+
 	return program;
-#else
-	return 0;
-#endif
 }
+
+/* ── Display list abstraction ─────────────────────────────────────────────── */
 
 void glx_displaylist_create(struct glx_displaylist* x, bool has_color, bool has_normal) {
 	x->has_color = has_color;
@@ -199,62 +332,253 @@ void glx_displaylist_draw(struct glx_displaylist* x, int type) {
 		}
 	} else {
 #endif
-		glEnableClientState(GL_VERTEX_ARRAY);
-		glBindBuffer(GL_ARRAY_BUFFER, x->modern);
-
 		size_t len_vertex = ((type == GLX_DISPLAYLIST_NORMAL) ? sizeof(GLshort) : sizeof(GLfloat)) * 3;
 		size_t len_color = x->has_color ? (sizeof(GLubyte) * 4) : 0;
 		size_t len_normal = x->has_normal ? (sizeof(GLbyte) * 3) : 0;
 		size_t len_texcoord = x->has_texcoord ? (sizeof(float) * 2) : 0;
 
-		switch(type) {
-			case GLX_DISPLAYLIST_NORMAL: glVertexPointer(3, GL_SHORT, 0, NULL); break;
-			case GLX_DISPLAYLIST_POINTS:
-			case GLX_DISPLAYLIST_ENHANCED: glVertexPointer(3, GL_FLOAT, 0, NULL); break;
-		}
+#if defined(OPENGL_ES)
+		if(gles_version >= 2 && default_shader) {
+			/* ES 2.0 path: use vertex attributes */
+			glBindBuffer(GL_ARRAY_BUFFER, x->modern);
 
-		size_t offset = x->size * len_vertex;
+			/* a_Position (location 0) — tightly packed, offset 0 */
+			glVertexAttribPointer(0, 3,
+				(type == GLX_DISPLAYLIST_NORMAL) ? GL_SHORT : GL_FLOAT,
+				GL_FALSE, 0, (void*)0);
+			glEnableVertexAttribArray(0);
 
-		if(x->has_color) {
-			glEnableClientState(GL_COLOR_ARRAY);
-			glColorPointer(4, GL_UNSIGNED_BYTE, 0, (const void*)offset);
-			offset += x->size * len_color;
-		}
+			/* a_Color (location 1) — tightly packed after vertex block */
+			if(x->has_color) {
+				glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, 0,
+					(void*)(x->size * len_vertex));
+				glEnableVertexAttribArray(1);
+				/* Only set uniforms if default_shader is active */
+				GLint cur_prog;
+				glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+				if(cur_prog == (GLint)default_shader)
+					glUniform1f(loc_u_HasVertexColor, 1.0F);
+			} else {
+				GLint cur_prog;
+				glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+				if(cur_prog == (GLint)default_shader)
+					glUniform1f(loc_u_HasVertexColor, 0.0F);
+			}
 
-		if(x->has_normal) {
-			glEnableClientState(GL_NORMAL_ARRAY);
-			glNormalPointer(GL_BYTE, 0, (const void*)offset);
-			offset += x->size * len_normal;
-		}
+			/* a_TexCoord (location 2) — tightly packed after vertex+color+normal */
+			if(x->has_texcoord) {
+				glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0,
+					(void*)(x->size * (len_vertex + len_color + len_normal)));
+				glEnableVertexAttribArray(2);
+				GLint cur_prog;
+				glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+				if(cur_prog == (GLint)default_shader) {
+					glUniform1f(loc_u_TextureEnabled, 1.0F);
+					/* Reset texcoord scale — font rendering sets 1/8192 */
+					glUniform1f(loc_u_TexCoordScale, 1.0F);
+				}
+			} else {
+				GLint cur_prog;
+				glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+				if(cur_prog == (GLint)default_shader) {
+					glUniform1f(loc_u_TextureEnabled, 0.0F);
+					glUniform1f(loc_u_TexCoordScale, 1.0F);
+				}
+			}
 
-		if(x->has_texcoord) {
-			glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-			glTexCoordPointer(2, GL_FLOAT, 0, (const void*)offset);
-		}
+			/* a_Normal (location 3) — for KV6 shader lighting */
+			if(x->has_normal) {
+				glVertexAttribPointer(3, 3, GL_BYTE, GL_FALSE, 0,
+					(void*)(x->size * (len_vertex + len_color)));
+				glEnableVertexAttribArray(3);
+			}
 
-		glBindBuffer(GL_ARRAY_BUFFER, 0);
+			GLenum draw_mode = (type == GLX_DISPLAYLIST_POINTS) ? GL_POINTS : GL_TRIANGLES;
+			glDrawArrays(draw_mode, 0, x->size);
 
-		if(type == GLX_DISPLAYLIST_POINTS) {
-			glDrawArrays(GL_POINTS, 0, x->size);
-		} else {
-#ifdef OPENGL_ES
-			glDrawArrays(GL_TRIANGLES, 0, x->size);
-#else
-		glDrawArrays(GL_QUADS, 0, x->size);
+			glDisableVertexAttribArray(0);
+			if(x->has_color) glDisableVertexAttribArray(1);
+			if(x->has_texcoord) glDisableVertexAttribArray(2);
+			if(x->has_normal) glDisableVertexAttribArray(3);
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+		} else
 #endif
-		}
+		{
+			/* GLES 1.1 / desktop GL 2.0+ fallback: use client-state arrays */
+			glEnableClientState(GL_VERTEX_ARRAY);
+			glBindBuffer(GL_ARRAY_BUFFER, x->modern);
 
-		if(x->has_texcoord)
-			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-		if(x->has_normal)
-			glDisableClientState(GL_NORMAL_ARRAY);
-		if(x->has_color)
-			glDisableClientState(GL_COLOR_ARRAY);
-		glDisableClientState(GL_VERTEX_ARRAY);
+			switch(type) {
+				case GLX_DISPLAYLIST_NORMAL: glVertexPointer(3, GL_SHORT, 0, NULL); break;
+				case GLX_DISPLAYLIST_POINTS:
+				case GLX_DISPLAYLIST_ENHANCED: glVertexPointer(3, GL_FLOAT, 0, NULL); break;
+			}
+
+			size_t offset = x->size * len_vertex;
+
+			if(x->has_color) {
+				glEnableClientState(GL_COLOR_ARRAY);
+				glColorPointer(4, GL_UNSIGNED_BYTE, 0, (const void*)offset);
+				offset += x->size * len_color;
+			}
+
+			if(x->has_normal) {
+				glEnableClientState(GL_NORMAL_ARRAY);
+				glNormalPointer(GL_BYTE, 0, (const void*)offset);
+				offset += x->size * len_normal;
+			}
+
+			if(x->has_texcoord) {
+				glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+				glTexCoordPointer(2, GL_FLOAT, 0, (const void*)offset);
+			}
+
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+			if(type == GLX_DISPLAYLIST_POINTS) {
+				glDrawArrays(GL_POINTS, 0, x->size);
+			} else {
+#ifdef OPENGL_ES
+				glDrawArrays(GL_TRIANGLES, 0, x->size);
+#else
+				glDrawArrays(GL_QUADS, 0, x->size);
+#endif
+			}
+
+			if(x->has_texcoord)
+				glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			if(x->has_normal)
+				glDisableClientState(GL_NORMAL_ARRAY);
+			if(x->has_color)
+				glDisableClientState(GL_COLOR_ARRAY);
+			glDisableClientState(GL_VERTEX_ARRAY);
+		}
 #ifndef OPENGL_ES
 	}
 #endif
 }
+
+/* ── ES 2.0 helper draw functions ────────────────────────────────────────── */
+
+#ifdef OPENGL_ES
+void glx_use_default_shader(void) {
+	if(default_shader)
+		glUseProgram(default_shader);
+}
+
+int glx_default_shader_program(void) {
+	return default_shader;
+}
+
+static void glx_ensure_quad_vbo(void) {
+	if(quad_vbo)
+		return;
+	/* Clip-space fullscreen quad with texcoords */
+	static const float quad_verts[] = {
+		-1.0f, -1.0f,  0.0f,  0.0f,
+		 1.0f, -1.0f,  1.0f,  0.0f,
+		 1.0f,  1.0f,  1.0f,  1.0f,
+		-1.0f, -1.0f,  0.0f,  0.0f,
+		 1.0f,  1.0f,  1.0f,  1.0f,
+		-1.0f,  1.0f,  0.0f,  1.0f,
+	};
+	glGenBuffers(1, &quad_vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(quad_verts), quad_verts, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+static void glx_ensure_line_quad_vbo(void) {
+	if(line_quad_vbo)
+		return;
+	glGenBuffers(1, &line_quad_vbo);
+}
+
+void glx_draw_screen_quad(void) {
+#if defined(OPENGL_ES)
+	if(!default_shader)
+		return;
+	glx_ensure_quad_vbo();
+	glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(2);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+	glDisableVertexAttribArray(0);
+	glDisableVertexAttribArray(2);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+#endif
+}
+
+#endif /* OPENGL_ES */
+
+void glx_draw_line_2d(float x1, float y1, float x2, float y2) {
+#if defined(OPENGL_ES)
+	if(default_shader) {
+		float verts[] = {x1, y1, 0.0f, x2, y2, 0.0f};
+		glx_ensure_line_quad_vbo();
+		glBindBuffer(GL_ARRAY_BUFFER, line_quad_vbo);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+		GLint cur_prog;
+		glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+		if(cur_prog == (GLint)default_shader) {
+			glUniform1f(loc_u_HasVertexColor, 0.0F);
+			glUniform4fv(loc_u_Color, 1, gles_current_color);
+			glUniform1f(loc_u_TextureEnabled, 0.0F);
+			glUniform1f(loc_u_TexCoordScale, 1.0F);
+		}
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+		glEnableVertexAttribArray(0);
+		glDrawArrays(GL_LINES, 0, 2);
+		glDisableVertexAttribArray(0);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		return;
+	}
+#else
+	glBegin(GL_LINES);
+	glVertex2f(x1, y1);
+	glVertex2f(x2, y2);
+	glEnd();
+#endif
+}
+
+void glx_draw_quad_2d(float x, float y, float w, float h) {
+#if defined(OPENGL_ES)
+	if(default_shader) {
+		float verts[] = {
+			x, y, 0.0f,     x, y - h, 0.0f,   x + w, y - h, 0.0f,
+			x, y, 0.0f,     x + w, y - h, 0.0f, x + w, y, 0.0f,
+		};
+		glx_ensure_line_quad_vbo();
+		glBindBuffer(GL_ARRAY_BUFFER, line_quad_vbo);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+		GLint cur_prog;
+		glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+		if(cur_prog == (GLint)default_shader) {
+			glUniform1f(loc_u_HasVertexColor, 0.0F);
+			glUniform4fv(loc_u_Color, 1, gles_current_color);
+			glUniform1f(loc_u_TextureEnabled, 0.0F);
+			glUniform1f(loc_u_TexCoordScale, 1.0F);
+		}
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+		glEnableVertexAttribArray(0);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+		glDisableVertexAttribArray(0);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		return;
+	}
+#else
+	glBegin(GL_QUADS);
+	glVertex2f(x, y);
+	glVertex2f(x + w, y);
+	glVertex2f(x + w, y - h);
+	glVertex2f(x, y - h);
+	glEnd();
+#endif
+}
+
+/* ── Spherical fog ───────────────────────────────────────────────────────── */
 
 void glx_enable_sphericalfog() {
 #ifndef OPENGL_ES
@@ -298,35 +622,38 @@ void glx_enable_sphericalfog() {
 		glLightf(GL_LIGHT1, GL_SPOT_EXPONENT, 128.0F);
 		glNormal3f(0.0F, 1.0F, 0.0F);
 	}
-#else
-	matrix_push(matrix_model);
-	matrix_identity(matrix_model);
-	matrix_upload();
-	matrix_pop(matrix_model);
+#elif defined(OPENGL_ES)
+	if(gles_version < 2) {
+		/* ES 1.1: use fixed-function fog/lighting */
+		matrix_push(matrix_model);
+		matrix_identity(matrix_model);
+		matrix_upload();
+		matrix_pop(matrix_model);
 
-	glEnable(GL_LIGHTING);
-	glEnable(GL_LIGHT1);
-	glEnable(GL_COLOR_MATERIAL);
-	// glColorMaterial(GL_FRONT,GL_AMBIENT_AND_DIFFUSE);
-	float amb[4] = {0.0F, 0.0F, 0.0F, 1.0F};
-	glLightModelfv(GL_LIGHT_MODEL_AMBIENT, amb);
+		glEnable(GL_LIGHTING);
+		glEnable(GL_LIGHT1);
+		glEnable(GL_COLOR_MATERIAL);
+		float amb[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+		glLightModelfv(GL_LIGHT_MODEL_AMBIENT, amb);
 
-	float lpos[4] = {camera_x, (settings.render_distance * map_size_y) / 16.0F, camera_z, 1.0F};
-	glLightfv(GL_LIGHT1, GL_POSITION, lpos);
-	float dir[3] = {0.0F, -1.0F, 0.0F};
-	glLightfv(GL_LIGHT1, GL_SPOT_DIRECTION, dir);
-	float dif[4] = {0.0F, 0.0F, 0.0F, 1.0F};
-	glLightfv(GL_LIGHT1, GL_DIFFUSE, dif);
-	float amb2[4] = {1.0F, 1.0F, 1.0F, 1.0F};
-	glLightfv(GL_LIGHT1, GL_AMBIENT, amb2);
-	glLightf(GL_LIGHT1, GL_SPOT_CUTOFF, tan(16.0F / map_size_y) / PI * 180.0F);
-	glLightf(GL_LIGHT1, GL_SPOT_EXPONENT, 128.0F);
-	glNormal3f(0.0F, 1.0F, 0.0F);
-	glEnable(GL_FOG);
-	glFogf(GL_FOG_MODE, GL_LINEAR);
-	glFogf(GL_FOG_START, 0.0F);
-	glFogf(GL_FOG_END, settings.render_distance);
-	glFogfv(GL_FOG_COLOR, fog_color);
+		float lpos[4] = {camera_x, (settings.render_distance * map_size_y) / 16.0F, camera_z, 1.0F};
+		glLightfv(GL_LIGHT1, GL_POSITION, lpos);
+		float dir[3] = {0.0F, -1.0F, 0.0F};
+		glLightfv(GL_LIGHT1, GL_SPOT_DIRECTION, dir);
+		float dif[4] = {0.0F, 0.0F, 0.0F, 1.0F};
+		glLightfv(GL_LIGHT1, GL_DIFFUSE, dif);
+		float amb2[4] = {1.0F, 1.0F, 1.0F, 1.0F};
+		glLightfv(GL_LIGHT1, GL_AMBIENT, amb2);
+		glLightf(GL_LIGHT1, GL_SPOT_CUTOFF, tan(16.0F / map_size_y) / PI * 180.0F);
+		glLightf(GL_LIGHT1, GL_SPOT_EXPONENT, 128.0F);
+		glNormal3f(0.0F, 1.0F, 0.0F);
+		glEnable(GL_FOG);
+		glFogf(GL_FOG_MODE, GL_LINEAR);
+		glFogf(GL_FOG_START, 0.0F);
+		glFogf(GL_FOG_END, settings.render_distance);
+		glFogfv(GL_FOG_COLOR, fog_color);
+	}
+	/* ES 2.0: fog handled by shader — nothing to do here */
 #endif
 	glx_fog = 1;
 }
@@ -348,13 +675,16 @@ void glx_disable_sphericalfog() {
 		float a[4] = {0.2F, 0.2F, 0.2F, 1.0F};
 		glLightModelfv(GL_LIGHT_MODEL_AMBIENT, a);
 	}
-#else
-	glDisable(GL_FOG);
-	glDisable(GL_COLOR_MATERIAL);
-	glDisable(GL_LIGHT1);
-	glDisable(GL_LIGHTING);
-	float a[4] = {0.2F, 0.2F, 0.2F, 1.0F};
-	glLightModelfv(GL_LIGHT_MODEL_AMBIENT, a);
+#elif defined(OPENGL_ES)
+	if(gles_version < 2) {
+		glDisable(GL_FOG);
+		glDisable(GL_COLOR_MATERIAL);
+		glDisable(GL_LIGHT1);
+		glDisable(GL_LIGHTING);
+		float a[4] = {0.2F, 0.2F, 0.2F, 1.0F};
+		glLightModelfv(GL_LIGHT_MODEL_AMBIENT, a);
+	}
+	/* ES 2.0: nothing to undo */
 #endif
 	glx_fog = 0;
 }

@@ -603,9 +603,14 @@ void window_init() {
 	/* GL attributes MUST be set before SDL_CreateWindow: the EGLConfig /
 	   pixel format (color sizes, depth size and, crucially, the renderable
 	   type ES1 vs ES2) is chosen at window creation time. Setting them after
-	   the window exists makes the context/config pairing driver-dependent. */
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 1);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+	   the window exists makes the context/config pairing driver-dependent.
+	   Try ES 2.0 first; fall back to ES 1.1 if context creation fails. */
+	int es_major = 2, es_minor = 0;
+#ifdef OPENGL_ES
+retry_context:
+#endif
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, es_major);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, es_minor);
 	SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
 	SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
 	SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
@@ -619,9 +624,23 @@ void window_init() {
 		= SDL_CreateWindow("KyroSpades " KYROSPADES_VERSION, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 						   settings.window_width, settings.window_height, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 
-	SDL_GLContext* ctx = SDL_GL_CreateContext(hud_window->impl);
-	if(!ctx)
+	SDL_GLContext ctx = SDL_GL_CreateContext(hud_window->impl);
+	if(!ctx) {
+#ifdef OPENGL_ES
+		if(es_major == 2) {
+			log_warn("GLES 2.0 context failed (%s), trying GLES 1.1 fallback", SDL_GetError());
+			SDL_DestroyWindow(hud_window->impl);
+			es_major = 1;
+			es_minor = 1;
+			goto retry_context;
+		}
+#endif
 		log_error("SDL_GL_CreateContext failed: %s", SDL_GetError());
+	}
+#ifdef OPENGL_ES
+	gles_version = es_major;
+	log_info("OpenGL ES context: %d.%d", es_major, es_minor);
+#endif
 
 	/* The actual drawable size can differ from the requested window size
 	   (Android renders fullscreen at native resolution; HighDPI desktops

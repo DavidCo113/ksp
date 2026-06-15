@@ -124,15 +124,19 @@ void chunk_render(struct chunk_render_call* c) {
 		matrix_upload();
 
 		if(c->chunk->display_list.has_texcoord) {
+#if !defined(OPENGL_ES)
 			glEnable(GL_TEXTURE_2D);
+#endif
 			glBindTexture(GL_TEXTURE_2D, texture_blocks.texture_id);
-			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		}
 
 		glx_displaylist_draw(&c->chunk->display_list, GLX_DISPLAYLIST_NORMAL);
 
-		if(c->chunk->display_list.has_texcoord)
+		if(c->chunk->display_list.has_texcoord) {
+#if !defined(OPENGL_ES)
 			glDisable(GL_TEXTURE_2D);
+#endif
+		}
 
 		matrix_pop(matrix_model);
 	}

@@ -253,10 +253,10 @@ void skins_render_preview(enum skin_category_type category, int entry, float cx,
 	if(entry < 0 || entry >= cat->count)
 		return;
 
-	glMatrixMode(GL_PROJECTION);
-	glPushMatrix();
-	glLoadIdentity();
-	glOrtho(0.0, settings.window_width, 0.0, settings.window_height, -100.0, 100.0);
+	mat4 saved_proj;
+	memcpy(saved_proj, matrix_projection, sizeof(mat4));
+	matrix_ortho(matrix_projection, 0.0, settings.window_width, 0.0, settings.window_height, -100.0, 100.0);
+	matrix_upload_p();
 
 	mat4 saved_model;
 	memcpy(saved_model, matrix_model, sizeof(mat4));
@@ -306,9 +306,9 @@ void skins_render_preview(enum skin_category_type category, int entry, float cx,
 	}
 
 	memcpy(matrix_model, saved_model, sizeof(mat4));
+	memcpy(matrix_projection, saved_proj, sizeof(mat4));
 	matrix_upload();
-	glMatrixMode(GL_PROJECTION);
-	glPopMatrix();
+	matrix_upload_p();
 }
 
 void skins_init(void) {
