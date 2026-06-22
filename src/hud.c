@@ -747,6 +747,17 @@ static int hud_ingame_onscreencontrol(int index, char* str, int activate) {
                                                 if(activate == 1)
                                                         window_pressed_keys[WINDOW_KEY_CROUCH] = 1;
                                                 return 1;
+                                        /* Spectator free-camera toggle (touch has no keyboard key
+                                           for WINDOW_KEY_SWITCH_CAMERA). PRESS only; the handler
+                                           toggles on PRESS. */
+                                        case 68:
+                                                if(camera_mode != CAMERAMODE_SPECTATOR)
+                                                        return 0;
+                                                if(str)
+                                                        strcpy(str, "Cam");
+                                                if(activate == 1)
+                                                        cameracontroller_bodyview_mode = !cameracontroller_bodyview_mode;
+                                                return 1;
                                 }
                         }
                 }
@@ -2307,6 +2318,14 @@ texture_draw_empty_rotated(settings.window_width - 143 * scalef + tent2_x * map_
                 font_centered(settings.window_width - settings.window_height * 0.075F, settings.window_height * 0.47F,
                                           settings.window_height * 0.04F, str);
         }
+        /* Spectator free-camera toggle, under the LMB/RMB plates. */
+        if(hud_ingame_onscreencontrol(68, str, -1)) {
+                texture_draw_rotated(&texture_ui_input, settings.window_width - settings.window_height * 0.075F,
+                                                         settings.window_height * 0.3F, settings.window_height * 0.15F,
+                                                         settings.window_height * 0.1F, 0.0F);
+                font_centered(settings.window_width - settings.window_height * 0.075F, settings.window_height * 0.32F,
+                                          settings.window_height * 0.04F, str);
+        }
         /* Jump + Crouch side by side directly below the left joystick (the
            joystick circle ends at 0.1 * window_height; these plates occupy the
            strip underneath it). Only shown alongside the joystick, i.e. when
@@ -3346,6 +3365,15 @@ static void hud_ingame_touch(void* finger, int action, float x, float y, float d
                                                           settings.window_width - settings.window_height * 0.075F, settings.window_height * 0.45F,
                                                           settings.window_height * 0.15F, settings.window_height * 0.1F)) {
                         hud_ingame_onscreencontrol(65, NULL, (action == TOUCH_DOWN) ? 1 : 0);
+                        return;
+                }
+                /* Spectator free-camera toggle plate. */
+                if(hud_ingame_onscreencontrol(68, NULL, -1)
+                   && is_inside_centered(f->start.x, settings.window_height - f->start.y,
+                                         settings.window_width - settings.window_height * 0.075F, settings.window_height * 0.3F,
+                                         settings.window_height * 0.15F, settings.window_height * 0.1F)) {
+                        if(action == TOUCH_DOWN)
+                                hud_ingame_onscreencontrol(68, NULL, 1);
                         return;
                 }
                 /* Jump/Crouch plates below the joystick. Hit-testing keys off the
