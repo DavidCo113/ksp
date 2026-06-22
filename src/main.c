@@ -1276,6 +1276,7 @@ int main(int argc, char** argv) {
         }
 
         window_init();
+        window_fromsettings();
 
 #ifndef OPENGL_ES
         if(glewInit())
