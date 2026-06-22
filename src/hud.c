@@ -653,7 +653,7 @@ static int hud_ingame_onscreencontrol(int index, char* str, int activate) {
                                         return 1;
                         }
                 } else {
-                        if(!network_connected || (network_connected && network_logged_in)) {
+                        if(!network_connected || network_logged_in || demo_is_playing()) {
                                 switch(index) {
                                         case 0:
                                                 if(str)
@@ -1016,15 +1016,32 @@ static void demo_playback_render_overlay(float scalef) {
 #if !defined(OPENGL_ES)
         glEnable(GL_TEXTURE_2D);
 #endif
+        float text_h = 13.0f * scalef;
+        float text_y = bar_y - 18.0f * scalef;
         int cur_m = (int)(DemoPlaybackState.current_time)/60, cur_s = (int)(DemoPlaybackState.current_time)%60;
         int dur_m = (int)(DemoPlaybackState.duration)/60, dur_s = (int)(DemoPlaybackState.duration)%60;
+        glColor3f(1.0f, 1.0f, 1.0f);
+#ifdef USE_TOUCH
+        char speed_buf[8];
+        snprintf(speed_buf, sizeof(speed_buf), "%.4gx", (double)DemoPlaybackState.speed);
+        hud_font_render(bar_x, text_y, text_h, speed_buf, 1.0f);
+
+        char time_buf[32];
+        snprintf(time_buf, sizeof(time_buf), "  %d:%02d / %d:%02d", cur_m, cur_s, dur_m, dur_s);
+        hud_font_render(bar_x + font_length(text_h, speed_buf), text_y, text_h, time_buf, 1.0f);
+
+        const char* btn = DemoPlaybackState.finished ? "|<" :
+                          DemoPlaybackState.paused   ? "|>" : "||";
+        hud_font_render(bar_x + bar_w - font_length(text_h, btn), text_y, text_h, btn, 1.0f);
+#else
         char buf[80];
         snprintf(buf, sizeof(buf), "%d:%02d / %d:%02d  %.4gx%s",
                 cur_m, cur_s, dur_m, dur_s, (double)DemoPlaybackState.speed,
                 DemoPlaybackState.paused ? "  [PAUSED]" : (DemoPlaybackState.finished ? "  [END]" : ""));
-        glColor3f(1.0f, 1.0f, 1.0f);
-        hud_font_render(bar_x, bar_y - 18.0f * scalef, 13.0f * scalef, buf, 1.0f);
+        hud_font_render(bar_x, text_y, text_h, buf, 1.0f);
+#endif
 }
+
 
 static void hud_ingame_render(mu_Context* ctx, float scalex, float scalef) {
         // window_mousemode(camera_mode==CAMERAMODE_SELECTION?WINDOW_CURSOR_ENABLED:WINDOW_CURSOR_DISABLED);
@@ -3285,6 +3302,88 @@ static void hud_ingame_keyboard(int key, int action, int mods, int internal) {
 static void hud_ingame_touch(void* finger, int action, float x, float y, float dx, float dy) {
         window_setmouseloc(x, y);
         struct window_finger* f = (struct window_finger*)finger;
+
+#ifdef USE_TOUCH
+        if(demo_is_playing()) {
+                float scalef = settings.window_height / 600.0f;
+                float bar_w  = settings.window_width * 0.6f;
+                float bar_h  = 8.0f * scalef;
+                float bar_x  = (settings.window_width - bar_w) * 0.5f;
+                float bar_y  = settings.window_height - 28.0f * scalef;
+                float text_h = 13.0f * scalef;
+
+                /* bar_y is the OpenGL top edge; in touch/screen coords (y=0 at top):
+                   bar occupies [bar_top_sc, bar_bot_sc], text row sits below that. */
+                float bar_top_sc  = settings.window_height - bar_y;
+                float bar_bot_sc  = bar_top_sc + bar_h;
+                float text_row_sc = bar_bot_sc + 18.0f * scalef;
+                float hit_pad     = 14.0f * scalef;
+
+                static void* demo_scrub_finger = NULL;
+
+                /* Continue an in-progress scrub even when the finger leaves the bar. */
+                if(demo_scrub_finger == finger && action != TOUCH_DOWN) {
+                        float t = (x - bar_x) / bar_w * DemoPlaybackState.duration;
+                        if(t < 0.0f) t = 0.0f;
+                        if(t > DemoPlaybackState.duration) t = DemoPlaybackState.duration;
+                        demo_playback_seek(t);
+                        if(action == TOUCH_UP) demo_scrub_finger = NULL;
+                        return;
+                }
+
+                if(action == TOUCH_DOWN) {
+                        /* Scrub: touch started on or near the bar itself. */
+                        if(f->start.x >= bar_x && f->start.x <= bar_x + bar_w
+                           && f->start.y >= bar_top_sc - hit_pad
+                           && f->start.y <= bar_bot_sc + hit_pad) {
+                                demo_scrub_finger = finger;
+                                float t = (f->start.x - bar_x) / bar_w * DemoPlaybackState.duration;
+                                if(t < 0.0f) t = 0.0f;
+                                if(t > DemoPlaybackState.duration) t = DemoPlaybackState.duration;
+                                demo_playback_seek(t);
+                                return;
+                        }
+
+                        /* Text row: speed label (left) and pause/play/restart button (right). */
+                        if(f->start.x >= bar_x && f->start.x <= bar_x + bar_w
+                           && f->start.y >= text_row_sc - hit_pad
+                           && f->start.y <= text_row_sc + hit_pad) {
+
+                                char speed_buf[8];
+                                snprintf(speed_buf, sizeof(speed_buf), "%.4gx",
+                                         (double)DemoPlaybackState.speed);
+                                float speed_w = font_length(text_h, speed_buf) + 8.0f * scalef;
+
+                                const char* btn = DemoPlaybackState.finished ? "|<" :
+                                                  DemoPlaybackState.paused   ? "|>" : "||";
+                                float btn_w = font_length(text_h, btn) + 8.0f * scalef;
+
+                                if(f->start.x <= bar_x + speed_w) {
+                                        /* Cycle speed: 0.25 -> 0.5 -> 1 -> 2 -> 4 -> 0.25 */
+                                        static const float speeds[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
+                                        int n = (int)(sizeof(speeds) / sizeof(speeds[0]));
+                                        int idx = 0;
+                                        for(int i = 0; i < n; i++) {
+                                                if(fabsf(DemoPlaybackState.speed - speeds[i]) < 0.01f) {
+                                                        idx = i;
+                                                        break;
+                                                }
+                                        }
+                                        demo_playback_set_speed(speeds[(idx + 1) % n]);
+                                        return;
+                                }
+
+                                if(f->start.x >= bar_x + bar_w - btn_w) {
+                                        if(DemoPlaybackState.finished)
+                                                demo_playback_seek(0.0f);
+                                        else
+                                                demo_playback_toggle_pause();
+                                        return;
+                                }
+                        }
+                }
+        }
+#endif
 
         /* Selection overlays take priority over the on-screen controls below:
            while one is open the screen is divided into thirds (left / middle /
