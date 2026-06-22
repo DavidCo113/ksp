@@ -468,7 +468,9 @@ void window_apply() {
 		window_swapping(0);
 
 	if(pending_fullscreen) {
-		SDL_SetWindowFullscreen(hud_window->impl, SDL_WINDOW_FULLSCREEN);
+		/* DESKTOP keeps the native drawable resolution; exclusive fullscreen
+		   forces a mode change that mismatches the drawable and clips the HUD. */
+		SDL_SetWindowFullscreen(hud_window->impl, SDL_WINDOW_FULLSCREEN_DESKTOP);
 	} else {
 		SDL_SetWindowFullscreen(hud_window->impl, 0);
 		SDL_SetWindowSize(hud_window->impl, pending_width, pending_height);
@@ -685,6 +687,17 @@ void window_deinit() {
 static int quit = 0;
 void window_update() {
 	SDL_GL_SwapWindow(hud_window->impl);
+
+	/* Reshape from the real drawable if it drifted from the framebuffer
+	   (fullscreen toggle / orientation change) so the viewport and HUD agree. */
+	{
+		int dw = 0, dh = 0;
+		SDL_GL_GetDrawableSize(hud_window->impl, &dw, &dh);
+		if(dw > 0 && dh > 0
+		   && (dw != settings.window_width || dh != settings.window_height))
+			reshape(hud_window, dw, dh);
+	}
+
 	SDL_Event event;
 	while(SDL_PollEvent(&event)) {
 		switch(event.type) {
@@ -725,7 +738,12 @@ void window_update() {
 			case SDL_WINDOWEVENT:
 				if(event.window.event == SDL_WINDOWEVENT_RESIZED
 				   || event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-					reshape(hud_window, event.window.data1, event.window.data2);
+					/* data1/data2 are window coordinates; reshape from the
+					   drawable pixels, which differ on HighDPI / Android. */
+					int dw = 0, dh = 0;
+					SDL_GL_GetDrawableSize(hud_window->impl, &dw, &dh);
+					if(dw <= 0 || dh <= 0) { dw = event.window.data1; dh = event.window.data2; }
+					reshape(hud_window, dw, dh);
 				}
 				break;
 			case SDL_MOUSEWHEEL:

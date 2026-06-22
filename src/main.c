@@ -943,6 +943,10 @@ void reshape(struct window_instance* window, int width, int height) {
         glViewport(0, 0, width, height);
         settings.window_width = width;
         settings.window_height = height;
+        /* Keep the settings-menu working copy aligned, otherwise an OS resize
+           looks like a pending edit there and gets reverted on commit. */
+        settings_tmp.window_width = width;
+        settings_tmp.window_height = height;
         if(settings.vsync < 2)
                 window_swapping(settings.vsync);
         if(settings.vsync > 1)
