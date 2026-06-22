@@ -30,6 +30,10 @@
 #include "player.h"
 #include "network.h"
 
+#if defined(USE_SDL) && defined(__ANDROID__)
+#include <jni.h>
+#endif
+
 void hud_ingame_mouseclick(double x, double y, int button, int action, int mods);
 extern float camera_rot_x, camera_rot_y;
 extern void camera_overflow_adjust(void);
@@ -79,6 +83,11 @@ static int pending_vsync;
 static int pending_fullscreen;
 static int pending_width;
 static int pending_height;
+/* Last known non-fullscreen window size (points), used to return to the
+   right size when leaving fullscreen - reshape() clobbers
+   settings.window_width/height with the fullscreen drawable size. */
+static int windowed_width = 0;
+static int windowed_height = 0;
 
 #ifdef USE_GLFW
 
@@ -363,11 +372,18 @@ void window_apply() {
 
 	const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
 	if(pending_fullscreen) {
+		/* Remember the windowed size first: reshape() overwrites
+		   settings.window_width/height (and thus pending_*) with the
+		   fullscreen size, so it can't be recovered on exit otherwise. */
+		if(!glfwGetWindowMonitor(hud_window->impl))
+			glfwGetWindowSize(hud_window->impl, &windowed_width, &windowed_height);
 		glfwSetWindowMonitor(hud_window->impl, glfwGetPrimaryMonitor(), 0, 0,
 							 mode->width, mode->height, mode->refreshRate);
 	} else {
-		glfwSetWindowMonitor(hud_window->impl, NULL, (mode->width - pending_width) / 2,
-							 (mode->height - pending_height) / 2, pending_width, pending_height, 0);
+		int w = windowed_width > 0 ? windowed_width : pending_width;
+		int h = windowed_height > 0 ? windowed_height : pending_height;
+		glfwSetWindowMonitor(hud_window->impl, NULL, (mode->width - w) / 2,
+							 (mode->height - h) / 2, w, h, 0);
 	}
 }
 
@@ -458,6 +474,26 @@ void window_fromsettings() {
 	window_pending_apply = 1;
 }
 
+#ifdef __ANDROID__
+/* Hide/show only the top status bar via KyroSpadesActivity.setStatusBarHidden,
+   which keeps the bottom navigation bar (and its Escape-mapped back button).
+   SDL's own fullscreen hides both bars, which traps the user in the menu. */
+static void android_set_status_bar_hidden(int hidden) {
+	JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+	jobject activity = (jobject)SDL_AndroidGetActivity();
+	if(!env || !activity)
+		return;
+	jclass cls = (*env)->GetObjectClass(env, activity);
+	jmethodID mid = (*env)->GetStaticMethodID(env, cls, "setStatusBarHidden", "(Z)V");
+	if(mid)
+		(*env)->CallStaticVoidMethod(env, cls, mid, (jboolean)(hidden ? 1 : 0));
+	if((*env)->ExceptionCheck(env))
+		(*env)->ExceptionClear(env);
+	(*env)->DeleteLocalRef(env, cls);
+	(*env)->DeleteLocalRef(env, activity);
+}
+#endif
+
 void window_apply() {
 	if(!window_pending_apply) return;
 	window_pending_apply = 0;
@@ -468,12 +504,25 @@ void window_apply() {
 		window_swapping(0);
 
 	if(pending_fullscreen) {
-		/* DESKTOP keeps the native drawable resolution; exclusive fullscreen
-		   forces a mode change that mismatches the drawable and clips the HUD. */
+#ifdef __ANDROID__
+		android_set_status_bar_hidden(1);
+#else
+		/* Capture the current windowed size before switching, so we can
+		   restore it on exit. */
+		if(!(SDL_GetWindowFlags(hud_window->impl) & SDL_WINDOW_FULLSCREEN_DESKTOP))
+			SDL_GetWindowSize(hud_window->impl, &windowed_width, &windowed_height);
 		SDL_SetWindowFullscreen(hud_window->impl, SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
 	} else {
+#ifdef __ANDROID__
+		android_set_status_bar_hidden(0);
+#else
 		SDL_SetWindowFullscreen(hud_window->impl, 0);
-		SDL_SetWindowSize(hud_window->impl, pending_width, pending_height);
+		if(windowed_width > 0 && windowed_height > 0)
+			SDL_SetWindowSize(hud_window->impl, windowed_width, windowed_height);
+		else
+			SDL_SetWindowSize(hud_window->impl, pending_width, pending_height);
+#endif
 	}
 }
 

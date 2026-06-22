@@ -204,8 +204,6 @@ void chat_showpopup(const char* msg, float duration, int color) {
 }
 
 void drawScene() {
-        window_apply();
-
         if(settings.ambient_occlusion) {
                 glShadeModel(GL_SMOOTH);
         } else {
@@ -315,6 +313,11 @@ void drawScene() {
 }
 
 void display() {
+        /* Apply pending window changes (fullscreen, vsync, size) every frame.
+           drawScene() is skipped in the menus when not connected, so this must
+           not live there or settings only take effect once in-game. */
+        window_apply();
+
         if(network_map_transfer) {
                 glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
         } else {
