@@ -34,6 +34,7 @@ extern int gles_version;
 extern float gles_current_color[4];
 void glx_set_color4f(float r, float g, float b, float a);
 void glx_get_current_color(float* dst);
+void glx_set_team_color(float r, float g, float b);
 
 struct glx_displaylist {
 	uint32_t legacy;

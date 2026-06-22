@@ -387,9 +387,9 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 	if(!settings.voxlap_models) {
 		if(!kv6->has_display_list) {
 			struct tesselator tess_color;
-			tesselator_create(&tess_color, VERTEX_INT, 1, 1);
+			tesselator_create(&tess_color, VERTEX_INT, 1, 0);
 			struct tesselator tess_team;
-			tesselator_create(&tess_team, VERTEX_INT, 1, 1);
+			tesselator_create(&tess_team, VERTEX_INT, 1, 0);
 
 			glx_displaylist_create(kv6->display_list + 0, true, true);
 			glx_displaylist_create(kv6->display_list + 1, true, true);
@@ -522,17 +522,27 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 							   (float[]) {gamestate.team_1.red * 0.75F / 255.0F,
 										  gamestate.team_1.green * 0.75F / 255.0F,
 										  gamestate.team_1.blue * 0.75F / 255.0F, 1.0F});
+					glx_set_team_color(gamestate.team_1.red * 0.75F / 255.0F,
+									   gamestate.team_1.green * 0.75F / 255.0F,
+									   gamestate.team_1.blue * 0.75F / 255.0F);
 					break;
 				case TEAM_2:
 					glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR,
 							   (float[]) {gamestate.team_2.red * 0.75F / 255.0F,
 										  gamestate.team_2.green * 0.75F / 255.0F,
 										  gamestate.team_2.blue * 0.75F / 255.0F, 1.0F});
+					glx_set_team_color(gamestate.team_2.red * 0.75F / 255.0F,
+									   gamestate.team_2.green * 0.75F / 255.0F,
+									   gamestate.team_2.blue * 0.75F / 255.0F);
 					break;
-				default: glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, (float[]) {0, 0, 0, 1});
+				default:
+					glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, (float[]) {0, 0, 0, 1});
+					glx_set_team_color(0.0F, 0.0F, 0.0F);
 			}
 
 			glx_displaylist_draw(kv6->display_list + 1, GLX_DISPLAYLIST_NORMAL);
+
+			glx_set_team_color(1.0F, 1.0F, 1.0F);
 
 			matrix_pop(matrix_model);
 
@@ -604,6 +614,7 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 									 "uniform mat4 model;\n"
 									 "uniform mat4 u_MVP;\n"
 									 "uniform float dist_factor;\n"
+									 "uniform vec4 u_TeamColor;\n"
 									 "varying vec4 v_Color;\n"
 									 "void main(void) {\n"
 									 "    gl_Position = u_MVP * vec4(a_Position, 1.0);\n"
@@ -611,7 +622,7 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 									 "    vec3 N = normalize(model * vec4(a_Normal, 0.0)).xyz;\n"
 									 "    vec3 L = normalize(vec3(0.0, -1.0, 1.0));\n"
 									 "    float d = clamp(dot(N, L), 0.0, 1.0) * 0.5 + 0.5;\n"
-									 "    v_Color = mix(vec4(d, d, d, 1.0) * a_Color, vec4(fog, 1.0), min(dist, 1.0));\n"
+									 "    v_Color = mix(vec4(d, d, d, 1.0) * a_Color * u_TeamColor, vec4(fog, 1.0), min(dist, 1.0));\n"
 									 "    gl_PointSize = size / gl_Position.w;\n"
 									 "}\n",
 									 "precision mediump float;\n"
@@ -619,8 +630,14 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 									 "void main(void) {\n"
 									 "    gl_FragColor = v_Color;\n"
 									 "}\n");
-				if(kv6_program_es2)
+				if(kv6_program_es2) {
 					log_info("KV6 ES 2.0 shader compiled (program %u)", kv6_program_es2);
+					glUseProgram(kv6_program_es2);
+					GLint loc = glGetUniformLocation(kv6_program_es2, "u_TeamColor");
+					if(loc >= 0)
+						glUniform4f(loc, 1.0F, 1.0F, 1.0F, 1.0F);
+					glUseProgram(0);
+				}
 				kv6_program = 0;
 				}
 #endif
@@ -711,14 +728,24 @@ void kv6_render(struct kv6_t* kv6, unsigned char team) {
 		switch(team) {
 			case TEAM_1:
 				glColor3ub(gamestate.team_1.red * 0.75F, gamestate.team_1.green * 0.75F, gamestate.team_1.blue * 0.75F);
+				glx_set_team_color(gamestate.team_1.red * 0.75F / 255.0F,
+								   gamestate.team_1.green * 0.75F / 255.0F,
+								   gamestate.team_1.blue * 0.75F / 255.0F);
 				break;
 			case TEAM_2:
 				glColor3ub(gamestate.team_2.red * 0.75F, gamestate.team_2.green * 0.75F, gamestate.team_2.blue * 0.75F);
+				glx_set_team_color(gamestate.team_2.red * 0.75F / 255.0F,
+								   gamestate.team_2.green * 0.75F / 255.0F,
+								   gamestate.team_2.blue * 0.75F / 255.0F);
 				break;
-			default: glColor3ub(0, 0, 0);
+			default:
+				glColor3ub(0, 0, 0);
+				glx_set_team_color(0.0F, 0.0F, 0.0F);
 		}
 
 		glx_displaylist_draw(kv6->display_list + 1, GLX_DISPLAYLIST_POINTS);
+
+		glx_set_team_color(1.0F, 1.0F, 1.0F);
 
 		if(settings.multisamples)
 			glEnable(GL_MULTISAMPLE);
