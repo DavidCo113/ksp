@@ -240,6 +240,8 @@ void hud_change(struct hud* new) {
 
 static float hud_ingame_touch_x = 0.0F;
 static float hud_ingame_touch_y = 0.0F;
+static void* demo_scrub_finger = NULL;
+static float demo_scrub_target = 0.0f;
 
 int screen_current = SCREEN_NONE;
 int show_exit = 0;
@@ -654,6 +656,11 @@ static int hud_ingame_onscreencontrol(int index, char* str, int activate) {
                         }
                 } else {
                         if(!network_connected || network_logged_in || demo_is_playing()) {
+                                /* Demo playback only needs the spectator controls
+                                   (LMB/RMB/Cam + Jump/Crouch). The top row would
+                                   just overlap the seek bar and do nothing. */
+                                if(demo_is_playing() && index <= 6)
+                                        return 0;
                                 switch(index) {
                                         case 0:
                                                 if(str)
@@ -1001,6 +1008,8 @@ static void demo_playback_render_overlay(float scalef) {
         float bar_y = (float)settings.window_height - 28.0f * scalef;
         float progress = (DemoPlaybackState.duration > 0.0f)
                 ? (DemoPlaybackState.current_time / DemoPlaybackState.duration) : 0.0f;
+        if(demo_scrub_finger && DemoPlaybackState.duration > 0.0f)
+                progress = demo_scrub_target / DemoPlaybackState.duration;
         if(progress < 0.0f) progress = 0.0f;
         if(progress > 1.0f) progress = 1.0f;
 #if !defined(OPENGL_ES)
@@ -3319,20 +3328,23 @@ static void hud_ingame_touch(void* finger, int action, float x, float y, float d
                 float text_row_sc = bar_bot_sc + 18.0f * scalef;
                 float hit_pad     = 14.0f * scalef;
 
-                static void* demo_scrub_finger = NULL;
-
-                /* Continue an in-progress scrub even when the finger leaves the bar. */
+                /* Update scrub target on MOVE/UP; only actually seek on UP so
+                   backward seeks (which require a full world reset + replay) fire
+                   once, and forward seeks don't trigger repeated chunk rebuilds. */
                 if(demo_scrub_finger == finger && action != TOUCH_DOWN) {
                         float t = (x - bar_x) / bar_w * DemoPlaybackState.duration;
                         if(t < 0.0f) t = 0.0f;
                         if(t > DemoPlaybackState.duration) t = DemoPlaybackState.duration;
-                        demo_playback_seek(t);
-                        if(action == TOUCH_UP) demo_scrub_finger = NULL;
+                        demo_scrub_target = t;
+                        if(action == TOUCH_UP) {
+                                demo_playback_seek(demo_scrub_target);
+                                demo_scrub_finger = NULL;
+                        }
                         return;
                 }
 
                 if(action == TOUCH_DOWN) {
-                        /* Scrub: touch started on or near the bar itself. */
+                        /* Bar: start scrubbing. */
                         if(f->start.x >= bar_x && f->start.x <= bar_x + bar_w
                            && f->start.y >= bar_top_sc - hit_pad
                            && f->start.y <= bar_bot_sc + hit_pad) {
@@ -3340,7 +3352,7 @@ static void hud_ingame_touch(void* finger, int action, float x, float y, float d
                                 float t = (f->start.x - bar_x) / bar_w * DemoPlaybackState.duration;
                                 if(t < 0.0f) t = 0.0f;
                                 if(t > DemoPlaybackState.duration) t = DemoPlaybackState.duration;
-                                demo_playback_seek(t);
+                                demo_scrub_target = t;
                                 return;
                         }
 
