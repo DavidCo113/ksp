@@ -117,8 +117,7 @@ void hud_init() {
         hud_demolist.ctx = malloc(sizeof(mu_Context));
         hud_skins.ctx = malloc(sizeof(mu_Context));
         hud_macros.ctx = malloc(sizeof(mu_Context));
-        hud_recording.ctx = malloc(sizeof(mu_Context));
-        hud_replay.ctx = malloc(sizeof(mu_Context));
+        hud_recorder.ctx = malloc(sizeof(mu_Context));
 
         hud_change(&hud_serverlist);
 }
@@ -3974,8 +3973,7 @@ void hud_common_sidebar(mu_Context* ctx, float scalex, float scaley) {
         hud_nav_button(ctx, &hud_controls, "Controls");
         hud_nav_button(ctx, &hud_skins, "Skins");
         hud_nav_button(ctx, &hud_macros, "Macros");
-        hud_nav_button(ctx, &hud_recording, "Video Recording");
-        hud_nav_button(ctx, &hud_replay, "Replay Settings");
+         hud_nav_button(ctx, &hud_recorder, "Video Record/Replay");
 
 
         if(!network_connected)
@@ -5386,7 +5384,7 @@ static void hud_recording_keyboard(int key, int action, int mods, int internal) 
         if(hud_recording_waiting_for_key && action == WINDOW_PRESS) {
                 struct config_key_pair* pk = config_key(WINDOW_KEY_RECORDING);
                 if(pk) {
-                        pk->def = internal;
+                        pk->def = key;
                         config_save();
                 }
                 hud_recording_waiting_for_key = false;
@@ -5404,10 +5402,7 @@ static void hud_recording_render(mu_Context* ctx, float scalex, float scaley) {
                 mu_layout_row(ctx, 1, (int[]) {-1}, 0);
 
                 mu_text(ctx, "Video Recording");
-                mu_layout_row(ctx, 1, (int[]) {-1}, 0);
-
-                int label_w = 120;
-                mu_layout_row(ctx, 2, (int[]) {label_w, -1}, 0);
+                mu_layout_row(ctx, 2, (int[]) {120, -1}, 0);
 
                 mu_label(ctx, "Recording FPS:");
                 char fps_label[16];
@@ -5426,8 +5421,10 @@ static void hud_recording_render(mu_Context* ctx, float scalex, float scaley) {
                         config_save();
                 }
 
-                mu_layout_row(ctx, 2, (int[]) {label_w, -1}, 0);
-                mu_label(ctx, "Toggle Key:");
+                mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+                mu_text(ctx, "-----------------------------------------");
+
+                char status[64];
                 char key_label_rec[32];
                 struct config_key_pair* pk_rec = config_key(WINDOW_KEY_RECORDING);
                 if (pk_rec) {
@@ -5435,21 +5432,16 @@ static void hud_recording_render(mu_Context* ctx, float scalex, float scaley) {
                 } else {
                         strcpy(key_label_rec, "Unknown");
                 }
-                if(hud_recording_waiting_for_key)
-                        mu_text_color(ctx, 255, 0, 0);
-                if(mu_button(ctx, key_label_rec))
-                        hud_recording_waiting_for_key = !hud_recording_waiting_for_key;
-                mu_text_color_default(ctx);
 
-                mu_layout_row(ctx, 2, (int[]) {label_w, -1}, 0);
-                mu_label(ctx, "Status:");
-                if(recorder_is_recording_active()) {
+                if(recorder_is_active()) {
+                        snprintf(status, sizeof(status), "Recording... (Press %s to stop)", key_label_rec);
                         mu_text_color(ctx, 255, 60, 60);
-                        mu_text(ctx, "Recording");
-                        mu_text_color_default(ctx);
                 } else {
-                        mu_text(ctx, "Not recording");
+                        snprintf(status, sizeof(status), "Not recording (Press %s to start)", key_label_rec);
+                        mu_text_color_default(ctx);
                 }
+                mu_text(ctx, status);
+                mu_text_color_default(ctx);
 
                 mu_layout_row(ctx, 1, (int[]) {-1}, -1);
 
@@ -5458,90 +5450,12 @@ static void hud_recording_render(mu_Context* ctx, float scalex, float scaley) {
         }
 }
 
-static void hud_replay_init(void) {
-}
-
-static void hud_replay_keyboard(int key, int action, int mods, int internal) {
-        if(key == WINDOW_KEY_ESCAPE && action == WINDOW_PRESS) {
-                hud_change(&hud_serverlist);
-        }
-        if(hud_replay_waiting_for_key && action == WINDOW_PRESS) {
-                struct config_key_pair* pk = config_key(WINDOW_KEY_REPLAY_SAVE);
-                if(pk) {
-                        pk->def = internal;
-                        config_save();
-                }
-                hud_replay_waiting_for_key = false;
-        }
-}
-
-static void hud_replay_render(mu_Context* ctx, float scalex, float scaley) {
-        hud_common_render(ctx);
-        mu_Rect frame = mu_rect(0, 0, settings.window_width, settings.window_height);
-        if(mu_begin_window_ex(ctx, "Main", frame, MU_OPT_NOFRAME | MU_OPT_NOTITLE | MU_OPT_NORESIZE)) {
-                mu_Container* cnt = mu_get_current_container(ctx);
-                cnt->rect = frame;
-                hud_common_sidebar(ctx, scalex, scaley);
-                mu_begin_panel(ctx, "Content");
-                mu_layout_row(ctx, 1, (int[]) {-1}, 0);
-
-                mu_text(ctx, "Replay Settings");
-                mu_layout_row(ctx, 1, (int[]) {-1}, 0);
-
-                int label_w = 120;
-                mu_layout_row(ctx, 2, (int[]) {label_w, -1}, 0);
-
-                mu_label(ctx, "Replay Buffer:");
-                char* replay_toggle = recorder_is_buffer_active() ? "Stop" : "Start";
-                if(mu_button(ctx, replay_toggle)) {
-                        settings.replay_enabled = !recorder_is_buffer_active();
-                        recorder_toggle_buffer();
-                        config_save();
-                }
-
-                mu_label(ctx, "Status:");
-                if(recorder_is_buffer_active()) {
-                        mu_text_color(ctx, 255, 60, 60);
-                        mu_text(ctx, "Buffer Active");
-                        mu_text_color_default(ctx);
-                } else {
-                        mu_text(ctx, "Buffer Off");
-                }
-
-                mu_label(ctx, "Duration (s):");
-                if(!recorder_is_buffer_active()) {
-                        int_slider(ctx, &settings.replay_duration, 10, 120);
-                } else {
-                        char dur_str[16];
-                        snprintf(dur_str, sizeof(dur_str), "%d", settings.replay_duration);
-                        mu_text(ctx, dur_str);
-                }
-
-                mu_label(ctx, "Save Hotkey:");
-                char key_label_rep[32];
-                struct config_key_pair* pk_rep = config_key(WINDOW_KEY_REPLAY_SAVE);
-                if (pk_rep) {
-                        window_keyname(pk_rep->def, key_label_rep, sizeof(key_label_rep));
-                } else {
-                        strcpy(key_label_rep, "Unknown");
-                }
-                if(hud_replay_waiting_for_key)
-                        mu_text_color(ctx, 255, 0, 0);
-                if(mu_button(ctx, key_label_rep))
-                        hud_replay_waiting_for_key = !hud_replay_waiting_for_key;
-                mu_text_color_default(ctx);
-
-                mu_layout_row(ctx, 1, (int[]) {-1}, -1);
-                mu_end_panel(ctx);
-                mu_end_window(ctx);
-        }
-}
-
-struct hud hud_recording = {
-        hud_recording_init,
+struct hud hud_recorder = {
+        hud_recorder_init,
         NULL,
-        hud_recording_render,
-        hud_recording_keyboard,
+        hud_recorder_render,
+        hud_recorder_keyboard,
+        NULL,
         NULL,
         NULL,
         NULL,
@@ -5551,22 +5465,6 @@ struct hud hud_recording = {
         0,
         NULL,
 };
-
-struct hud hud_replay = {
-        hud_replay_init,
-        NULL,
-        hud_replay_render,
-        hud_replay_keyboard,
-        NULL,
-        NULL,
-        NULL,
-        NULL,
-        NULL,
-        0,
-        0,
-        NULL,
-};
-
 
 
 struct hud hud_macros = {

@@ -136,11 +136,10 @@ int file_dir_exists(const char* path) {
 
 int file_dir_create(const char* path) {
 #ifdef OS_WINDOWS
-	mkdir(path);
+	return mkdir(path) == 0;
 #else
-	mkdir(path, 0755);
+	return mkdir(path, 0755) == 0;
 #endif
-	return 1;
 }
 
 int file_exists(const char* name) {

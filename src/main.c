@@ -56,6 +56,7 @@
 #include "chunk.h"
 #include "skins.h"
 #include "chatlog.h"
+#include "recorder.h"
 #include "main.h"
 
 int fps = 0;
@@ -1127,7 +1128,7 @@ void keys(struct window_instance* window, int key, int scancode, int action, int
                 sound_create(SOUND_LOCAL, &sound_screenshot, 0.0F, 0.0F, 0.0F);
         }
 
-        if(key == WINDOW_KEY_SAVE_MAP && action == WINDOW_PRESS) { // save map
+        if(key == WINDOW_KEY_SAVE_MAP && action == WINDOW_PRESS) {
                 time_t save_time;
                 time(&save_time);
                 char save_name[128];
@@ -1137,6 +1138,8 @@ void keys(struct window_instance* window, int key, int scancode, int action, int
 
                 sprintf(save_name, "Saved map as vxl/%ld.vxl", (long)save_time);
                 chat_add(0, 0x00FFFF, save_name);
+        } else if(key == WINDOW_KEY_RECORDING && action == WINDOW_PRESS) {
+                recorder_toggle_recording();
         }
 }
 
@@ -1172,6 +1175,7 @@ void mouse_scroll(struct window_instance* window, double xoffset, double yoffset
 }
 
 void deinit() {
+        recorder_shutdown();
         rpc_deinit();
         ping_deinit();
         if(network_connected)
@@ -1268,7 +1272,20 @@ int main(int argc, char** argv) {
         log_info("Game started!");
 
         settings.iron_sight = 1;
+        settings.replay_enabled = -1;
         config_reload();
+
+        if(settings.recording_fps == 0) settings.recording_fps = 60;
+        if(settings.recording_bitrate_kbps == 0) settings.recording_bitrate_kbps = 2000;
+        if(settings.replay_enabled == -1) {
+                settings.replay_enabled = 0;
+                if(settings.replay_duration == 0) settings.replay_duration = 30;
+        }
+        settings_tmp.recording_fps = settings.recording_fps;
+        settings_tmp.recording_bitrate_kbps = settings.recording_bitrate_kbps;
+
+        if(settings.replay_enabled)
+                recorder_buffer_start();
 
         if(settings.debug_log) {
                 log_set_level(LOG_TRACE);
@@ -1299,6 +1316,7 @@ int main(int argc, char** argv) {
                 ;
 
         init();
+        recorder_init();
         atexit(deinit);
 
         if(settings.vsync < 2)
@@ -1380,33 +1398,82 @@ int main(int argc, char** argv) {
                         physics_time_fixed = PHYSICS_STEP_TIME;
                 }
 
-                display();
+                 display();
+ 
+                   static bool replay_save_key_pressed = false;
+                   if (window_key_down(WINDOW_KEY_REPLAY_SAVE)) {
+                           if (!replay_save_key_pressed) {
+                                   if(recorder_save_replay())
+                                           recorder_trigger_replay_flash();
+                                   replay_save_key_pressed = true;
+                           }
+                   } else {
+                           replay_save_key_pressed = false;
+                   }
 
-                if(network_map_transfer_end) {
-                        static float loading_screen_seen_time = 0.0F;
-                        if(loading_screen_seen_time == 0.0F)
-                                loading_screen_seen_time = window_time();
-                        if(window_time() - loading_screen_seen_time >= 0.5F) {
-                                network_map_transfer = 0;
-                                network_map_transfer_end = 0;
-                                loading_screen_seen_time = 0.0F;
-                        }
-                }
+ 
+                 recorder_capture_frame();
+ 
+#ifndef OPENGL_ES
+                 if(recorder_is_flashing()) {
+                         glColor4f(0.0F, 1.0F, 0.0F, 0.5F);
+                         glLineWidth(5.0F);
+                         glBegin(GL_LINE_LOOP);
+                         glVertex2f(0.0F, 0.0F);
+                         glVertex2f((float)settings.window_width, 0.0F);
+                         glVertex2f((float)settings.window_width, (float)settings.window_height);
+                         glVertex2f(0.0F, (float)settings.window_height);
+                         glEnd();
+                         glLineWidth(1.0F);
+                 }
+ 
+                 if(recorder_is_recording_active()) {
+                         float blink = sin(window_time() * 3.0F) * 0.5F + 0.5F;
+                         if(blink > 0.0F) {
+                                 glDisable(GL_TEXTURE_2D);
+                                 glEnable(GL_BLEND);
+                                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                                 glColor4f(1.0F, 0.0F, 0.0F, 0.7F);
+                                 glLineWidth(2.0F);
+                                 glBegin(GL_LINE_LOOP);
+                                 glVertex2f(0.5F, 0.5F);
+                                 glVertex2f((float)settings.window_width - 0.5F, 0.5F);
+                                 glVertex2f((float)settings.window_width - 0.5F, (float)settings.window_height - 0.5F);
+                                 glVertex2f(0.5F, (float)settings.window_height - 0.5F);
+                                 glEnd();
+                                 glLineWidth(1.0F);
+                                 glDisable(GL_BLEND);
+                                 glEnable(GL_TEXTURE_2D);
+                         }
+                 }
+#endif
+ 
+                 if(network_map_transfer_end) {
+                         static float loading_screen_seen_time = 0.0F;
+                         if(loading_screen_seen_time == 0.0F)
+                                 loading_screen_seen_time = window_time();
+                         if(window_time() - loading_screen_seen_time >= 0.5F) {
+                                 network_map_transfer = 0;
+                                 network_map_transfer_end = 0;
+                                 loading_screen_seen_time = 0.0F;
+                         }
+                 }
+ 
+                 sound_update();
+                 network_update();
+                 window_update();
+ 
+                 rpc_update();
+ 
+                 if(settings.vsync > 1 && (window_time() - last_frame_start) < (1.0 / settings.vsync)) {
+                         double sleep_s = 1.0 / settings.vsync - (window_time() - last_frame_start);
+                         struct timespec ts;
+                         ts.tv_sec = (int)sleep_s;
+                         ts.tv_nsec = (sleep_s - ts.tv_sec) * 1000000000.0;
+                         nanosleep(&ts, NULL);
+                 }
+ 
+                 fps = 1.0F / dt;
 
-                sound_update();
-                network_update();
-                window_update();
-
-                rpc_update();
-
-                if(settings.vsync > 1 && (window_time() - last_frame_start) < (1.0 / settings.vsync)) {
-                        double sleep_s = 1.0 / settings.vsync - (window_time() - last_frame_start);
-                        struct timespec ts;
-                        ts.tv_sec = (int)sleep_s;
-                        ts.tv_nsec = (sleep_s - ts.tv_sec) * 1000000000.0;
-                        nanosleep(&ts, NULL);
-                }
-
-                fps = 1.0F / dt;
         }
 }

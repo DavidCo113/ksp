@@ -107,6 +107,12 @@ extern struct RENDER_OPTIONS {
 	int skin_intel;
 	int skin_tent;
 	int debug_log;
+	int recording_fps;
+	int recording_bitrate_kbps;
+	int replay_enabled;
+	int replay_duration;
+	int replay_save_hotkey;
+	char audio_monitor_source[64];
 } settings, settings_tmp;
 
 extern struct list config_keys;

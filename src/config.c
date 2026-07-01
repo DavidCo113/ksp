@@ -341,6 +341,10 @@ void config_save() {
         config_seti("client", "skin_intel", settings.skin_intel);
         config_seti("client", "skin_tent", settings.skin_tent);
         config_seti("client", "debug_log", settings.debug_log);
+        config_seti("client", "recording_fps", settings.recording_fps);
+        config_seti("client", "recording_bitrate", settings.recording_bitrate_kbps);
+        config_seti("client", "replay_enabled", settings.replay_enabled);
+        config_seti("client", "replay_duration", settings.replay_duration);
 
         config_sets("meta", "backend", CONFIG_BACKEND);
 
@@ -464,6 +468,10 @@ static int config_read_key(void* user, const char* section, const char* name, co
                 IMPORT_SETTING(settings.skin_intel, skin_intel, max(0, atoi(value)));
                 IMPORT_SETTING(settings.skin_tent, skin_tent, max(0, atoi(value)));
                 IMPORT_SETTING(settings.debug_log, debug_log, atoi(value));
+                IMPORT_SETTING(settings.recording_fps, recording_fps, atoi(value));
+                IMPORT_SETTING(settings.recording_bitrate_kbps, recording_bitrate, atoi(value));
+                IMPORT_SETTING(settings.replay_enabled, replay_enabled, atoi(value));
+                IMPORT_SETTING(settings.replay_duration, replay_duration, atoi(value));
         }
         if(!strcmp(section, "meta")) {
                 if(!strcmp(name, "backend")) {
@@ -674,7 +682,7 @@ void config_reload() {
         config_register_key(WINDOW_KEY_HIDEHUD, SDLK_F6, "hide_hud", 1, "Hide HUD", "Game");
         config_register_key(WINDOW_KEY_LASTTOOL, SDLK_q, "last_tool", 0, "Last tool", "Tools & Weapons");
         config_register_key(WINDOW_KEY_NETWORKSTATS, SDLK_F12, "network_stats", 1, "Network stats", "Information");
-        config_register_key(WINDOW_KEY_SAVE_MAP, SDLK_F9, "save_map", 0, "Save map", "Game");
+         config_register_key(WINDOW_KEY_SAVE_MAP, SDLK_F8, "save_map", 0, "Save map", "Game");
         config_register_key(WINDOW_KEY_SELECT1, SDLK_1, NULL, 0, NULL, NULL);
         config_register_key(WINDOW_KEY_SELECT2, SDLK_2, NULL, 0, NULL, NULL);
         config_register_key(WINDOW_KEY_SELECT3, SDLK_3, NULL, 0, NULL, NULL);
@@ -690,6 +698,9 @@ void config_reload() {
         config_register_key(WINDOW_KEY_DEMO_SPEED_DOWN, SDLK_MINUS,  "demo_speed_down", 0, "Half playback speed",     "Watch Demo");
         config_register_key(WINDOW_KEY_DEMO_SPEED_UP,   SDLK_EQUALS, "demo_speed_up",   0, "Double playback speed",   "Watch Demo");
         config_register_key(WINDOW_KEY_ROLL_CCW, SDLK_q, "roll_ccw", 0, "Roll counter-clockwise", "Spectator");
+                                 config_register_key(WINDOW_KEY_RECORDING, SDLK_F7, "recording", 0, "Start/Stop recording", "Game");
+                                 config_register_key(WINDOW_KEY_REPLAY_SAVE, SDLK_F8, "replay_save", 0, "Save Replay", "Game");
+
 #endif
 
 #ifdef USE_GLFW
@@ -738,7 +749,7 @@ void config_reload() {
         config_register_key(WINDOW_KEY_HIDEHUD, GLFW_KEY_F6, "hide_hud", 1, "Hide HUD", "Game");
         config_register_key(WINDOW_KEY_LASTTOOL, GLFW_KEY_Q, "last_tool", 0, "Last tool", "Tools & Weapons");
         config_register_key(WINDOW_KEY_NETWORKSTATS, GLFW_KEY_F12, "network_stats", 1, "Network stats", "Information");
-        config_register_key(WINDOW_KEY_SAVE_MAP, GLFW_KEY_F9, "save_map", 0, "Save map", "Game");
+         config_register_key(WINDOW_KEY_SAVE_MAP, GLFW_KEY_F8, "save_map", 0, "Save map", "Game");
         config_register_key(WINDOW_KEY_SELECT1, GLFW_KEY_1, NULL, 0, NULL, NULL);
         config_register_key(WINDOW_KEY_SELECT2, GLFW_KEY_2, NULL, 0, NULL, NULL);
         config_register_key(WINDOW_KEY_SELECT3, GLFW_KEY_3, NULL, 0, NULL, NULL);
@@ -754,6 +765,9 @@ void config_reload() {
         config_register_key(WINDOW_KEY_DEMO_SPEED_DOWN, GLFW_KEY_MINUS, "demo_speed_down", 0, "Half playback speed",     "Watch Demo");
         config_register_key(WINDOW_KEY_DEMO_SPEED_UP,   GLFW_KEY_EQUAL, "demo_speed_up",   0, "Double playback speed",   "Watch Demo");
         config_register_key(WINDOW_KEY_ROLL_CCW, GLFW_KEY_Q, "roll_ccw", 0, "Roll counter-clockwise", "Spectator");
+                                 config_register_key(WINDOW_KEY_RECORDING, GLFW_KEY_F7, "recording", 0, "Start/Stop recording", "Game");
+                                 config_register_key(WINDOW_KEY_REPLAY_SAVE, GLFW_KEY_F8, "replay_save", 0, "Save Replay", "Game");
+
 #endif
 
         list_sort(&config_keys, config_key_cmp);
@@ -1402,4 +1416,70 @@ void config_reload() {
                                  .category = "Weapon Settings",
                          });
 
+        list_add(&config_settings,
+                         &(struct config_setting) {
+                                 .value = &settings_tmp.recording_fps,
+                                 .type = CONFIG_TYPE_INT,
+                                 .min = 30,
+                                 .max = 60,
+                                 .name = "Recording FPS",
+                                 .help = "Frames per second for video recording",
+                                   .category = "Video Record/Replay",
+
+                         });
+        list_add(&config_settings,
+                         &(struct config_setting) {
+                                 .value = &settings_tmp.recording_bitrate_kbps,
+                                 .type = CONFIG_TYPE_INT,
+                                 .min = 500,
+                                 .max = 50000,
+                                 .name = "Recording bitrate (kbps)",
+                                  .help = "Video bitrate in kilobits per second. Higher = better quality, larger file",
+                                    .category = "Video Record/Replay",
+
+                                  });
+		list_add(&config_settings,
+		         &(struct config_setting) {
+		                 .value = &settings_tmp.replay_enabled,
+		                 .type = CONFIG_TYPE_INT,
+		                 .min = 0,
+		                 .max = 1,
+		                 .name = "Replay Enabled",
+		                 .help = "Continuously record segments for replay",
+                                   .category = "Video Record/Replay",
+
+		         });
+		list_add(&config_settings,
+		         &(struct config_setting) {
+		                 .value = &settings_tmp.replay_duration,
+		                 .type = CONFIG_TYPE_INT,
+		                 .min = 1,
+		                 .max = 300,
+		                 .name = "Replay Duration (s)",
+		                 .help = "Number of seconds of buffer to keep",
+                                   .category = "Video Record/Replay",
+
+		         });
+		list_add(&config_settings,
+		         &(struct config_setting) {
+		                 .value = &settings_tmp.replay_save_hotkey,
+		                 .type = CONFIG_TYPE_INT,
+		                 .min = 0,
+		                 .max = INT_MAX,
+		                 .name = "Replay Save Hotkey",
+		                 .help = "Hotkey to save the current replay buffer",
+                                   .category = "Video Record/Replay",
+
+		         });
+		list_add(&config_settings,
+		         &(struct config_setting) {
+		                 .value = settings_tmp.audio_monitor_source,
+		                 .type = CONFIG_TYPE_STRING,
+		                 .max = sizeof(settings.audio_monitor_source) - 1,
+		                 .name = "Audio Monitor Source",
+		                 .help = "PulseAudio monitor source for system audio capture",
+		                 .category = "Video Record/Replay",
+		         });
+
 }
+

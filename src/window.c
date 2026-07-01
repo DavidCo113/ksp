@@ -34,6 +34,42 @@
 #include <jni.h>
 #endif
 
+int window_shift_down(void) {
+#ifdef USE_GLFW
+	if(!hud_window || !hud_window->impl) return 0;
+	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
+		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+#else
+	const Uint8* state = SDL_GetKeyboardState(NULL);
+	if(!state) return 0;
+	return state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
+#endif
+}
+
+int window_alt_down(void) {
+#ifdef USE_GLFW
+	if(!hud_window || !hud_window->impl) return 0;
+	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_ALT) == GLFW_PRESS
+		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+#else
+	const Uint8* state = SDL_GetKeyboardState(NULL);
+	if(!state) return 0;
+	return state[SDL_SCANCODE_LALT] || state[SDL_SCANCODE_RALT];
+#endif
+}
+
+int window_super_down(void) {
+#ifdef USE_GLFW
+	if(!hud_window || !hud_window->impl) return 0;
+	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS
+		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+#else
+	const Uint8* state = SDL_GetKeyboardState(NULL);
+	if(!state) return 0;
+	return state[SDL_SCANCODE_LGUI] || state[SDL_SCANCODE_RGUI];
+#endif
+}
+
 void hud_ingame_mouseclick(double x, double y, int button, int action, int mods);
 extern float camera_rot_x, camera_rot_y;
 extern void camera_overflow_adjust(void);
@@ -69,6 +105,23 @@ static const char* window_internal_keyname(int internal) {
 		case WINDOW_KEY_UP:              return "Up Arrow";
 		case WINDOW_KEY_CURSOR_DOWN:
 		case WINDOW_KEY_DOWN:            return "Down Arrow";
+		case WINDOW_KEY_F1:              return "F1";
+		case WINDOW_KEY_F2:              return "F2";
+		case WINDOW_KEY_F3:              return "F3";
+		case WINDOW_KEY_F4:              return "F4";
+		case WINDOW_KEY_F5:              return "F5";
+		case WINDOW_KEY_F6:              return "F6";
+		case WINDOW_KEY_F7:              return "F7";
+		case WINDOW_KEY_F8:              return "F8";
+		case WINDOW_KEY_F9:              return "F9";
+		case WINDOW_KEY_F10:             return "F10";
+		case WINDOW_KEY_F11:             return "F11";
+		case WINDOW_KEY_F12:             return "F12";
+		case WINDOW_KEY_SCREENSHOT:      return "F5";
+		case WINDOW_KEY_HIDEHUD:         return "F6";
+		case WINDOW_KEY_SAVE_MAP:        return "F8";
+		case WINDOW_KEY_FULLSCREEN:      return "F11";
+		case WINDOW_KEY_NETWORKSTATS:    return "F12";
 		case WINDOW_KEY_DEMO_SEEK_BACK:  return "Left Arrow";
 		case WINDOW_KEY_DEMO_SEEK_FWD:   return "Right Arrow";
 		case WINDOW_KEY_DEMO_SPEED_DOWN: return "-";
@@ -214,6 +267,12 @@ void window_keyname(int keycode, char* output, size_t length) {
 		return;
 	}
 #endif
+	if(keycode >= GLFW_KEY_F1 && keycode <= GLFW_KEY_F12) {
+		snprintf(output, length, "F%d", keycode - GLFW_KEY_F1 + 1);
+		output[length - 1] = 0;
+		return;
+	}
+
 	/* Backend couldn't name it — fall back to our internal key labels for
 	   non-printable keys (arrows, demo controls, etc.). */
 	{
@@ -246,17 +305,6 @@ int window_key_down(int key) {
 	return window_pressed_keys[key];
 }
 
-int window_super_down(void) {
-	if(!hud_window || !hud_window->impl) return 0;
-	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS
-		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
-}
-
-int window_shift_down(void) {
-	if(!hud_window || !hud_window->impl) return 0;
-	return glfwGetKey(hud_window->impl, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
-		|| glfwGetKey(hud_window->impl, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
-}
 
 static GLFWcursor* window_hand_cursor = NULL;
 void window_cursor_hand(int on) {
@@ -587,18 +635,6 @@ void window_setclipboard(const char* text) {
 
 int window_key_down(int key) {
 	return window_pressed_keys[key];
-}
-
-int window_super_down(void) {
-	const Uint8* state = SDL_GetKeyboardState(NULL);
-	if(!state) return 0;
-	return state[SDL_SCANCODE_LGUI] || state[SDL_SCANCODE_RGUI];
-}
-
-int window_shift_down(void) {
-	const Uint8* state = SDL_GetKeyboardState(NULL);
-	if(!state) return 0;
-	return state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
 }
 
 static SDL_Cursor* window_hand_cursor = NULL;

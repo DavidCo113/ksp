@@ -64,6 +64,8 @@ extern struct hud hud_chatlog;
 extern struct hud hud_demolist;
 extern struct hud hud_skins;
 extern struct hud hud_macros;
+extern struct hud hud_recording;
+extern struct hud hud_replay;
 
 extern struct hud* hud_active;
 extern struct window_instance* hud_window;

@@ -6,15 +6,12 @@
 	KyroSpades is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
 	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
+	(at your option) later versions.
 
 	KyroSpades is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	but WITHOUT ANY WARRANTY; even the implied warranty of
 	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with KyroSpades.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #ifndef WINDOW_H
@@ -68,6 +65,14 @@ enum window_keys {
 	WINDOW_KEY_F2,
 	WINDOW_KEY_F3,
 	WINDOW_KEY_F4,
+	WINDOW_KEY_F5,
+	WINDOW_KEY_F6,
+	WINDOW_KEY_F7,
+	WINDOW_KEY_F8,
+	WINDOW_KEY_F9,
+	WINDOW_KEY_F10,
+	WINDOW_KEY_F11,
+	WINDOW_KEY_F12,
 	WINDOW_KEY_CHANGETEAM,
 	WINDOW_KEY_CHANGEWEAPON,
 	WINDOW_KEY_ENTER,
@@ -100,7 +105,9 @@ enum window_keys {
 	WINDOW_KEY_DEMO_SEEK_FWD,
 	WINDOW_KEY_DEMO_SPEED_DOWN,
 	WINDOW_KEY_DEMO_SPEED_UP,
-	WINDOW_KEY_MAP_ZOOM
+	WINDOW_KEY_MAP_ZOOM,
+	WINDOW_KEY_RECORDING,
+	WINDOW_KEY_REPLAY_SAVE
 };
 
 enum {
@@ -143,6 +150,7 @@ const char* window_clipboard(void);
 void window_setclipboard(const char* text);
 int window_key_down(int key);
 int window_super_down(void);
+int window_alt_down(void);
 int window_shift_down(void);
 void window_cursor_hand(int on);
 void window_open_url(const char* url);
