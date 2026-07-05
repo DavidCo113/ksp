@@ -80,6 +80,7 @@ struct chunk_render_call {
         struct chunk* chunk;
         int mirror_x;
         int mirror_y;
+        float dist_sq; // cached camera distance², computed once, not per qsort compare
 };
 
 void chunk_init() {
@@ -110,12 +111,12 @@ void chunk_init() {
 }
 
 static int chunk_sort(const void* a, const void* b) {
-        struct chunk_render_call* aa = (struct chunk_render_call*)a;
-        struct chunk_render_call* bb = (struct chunk_render_call*)b;
-        return distance2D(aa->chunk->x * CHUNK_SIZE + CHUNK_SIZE / 2, aa->chunk->y * CHUNK_SIZE + CHUNK_SIZE / 2, camera_x,
-                                          camera_z)
-                - distance2D(bb->chunk->x * CHUNK_SIZE + CHUNK_SIZE / 2, bb->chunk->y * CHUNK_SIZE + CHUNK_SIZE / 2, camera_x,
-                                         camera_z);
+        // near-to-far so opaque geometry benefits from early-z rejection.
+        // old version recomputed both distances every comparison AND
+        // truncated a float difference to int — cached key fixes both.
+        float da = ((const struct chunk_render_call*)a)->dist_sq;
+        float db = ((const struct chunk_render_call*)b)->dist_sq;
+        return (da > db) - (da < db);
 }
 
 void chunk_render(struct chunk_render_call* c) {
@@ -149,11 +150,15 @@ void chunk_draw_visible() {
 
         int overshoot = (settings.render_distance + CHUNK_SIZE - 1) / CHUNK_SIZE + 1;
 
+        // hoisted: was a libm pow() call inside the double loop, every frame
+        float rd = settings.render_distance + 1.414F * CHUNK_SIZE;
+        float rd_sq = rd * rd;
+
         // go through all possible chunks and store all in range and view
         for(int y = -overshoot; y < CHUNKS_PER_DIM + overshoot; y++) {
                 for(int x = -overshoot; x < CHUNKS_PER_DIM + overshoot; x++) {
-                        if(distance2D((x + 0.5F) * CHUNK_SIZE, (y + 0.5F) * CHUNK_SIZE, camera_x, camera_z)
-                           <= pow(settings.render_distance + 1.414F * CHUNK_SIZE, 2)) {
+                        float d = distance2D((x + 0.5F) * CHUNK_SIZE, (y + 0.5F) * CHUNK_SIZE, camera_x, camera_z);
+                        if(d <= rd_sq) {
                                 uint32_t tmp_x = ((uint32_t)x) % CHUNKS_PER_DIM;
                                 uint32_t tmp_y = ((uint32_t)y) % CHUNKS_PER_DIM;
 
@@ -165,12 +170,15 @@ void chunk_draw_visible() {
                                                 .chunk = c,
                                                 .mirror_x = (x < 0) ? -1 : ((x >= CHUNKS_PER_DIM) ? 1 : 0),
                                                 .mirror_y = (y < 0) ? -1 : ((y >= CHUNKS_PER_DIM) ? 1 : 0),
+                                                .dist_sq = d,
                                         };
                         }
                 }
         }
 
-        // sort all chunks to draw those in front first
+        // sort near→far: chunks are opaque, so drawing front-first lets
+        // early-z reject occluded fragments (correct — do NOT reverse for "transparency",
+        // water is rendered separately)
         qsort(chunks_draw, index, sizeof(struct chunk_render_call), chunk_sort);
 
         for(int k = 0; k < index; k++)

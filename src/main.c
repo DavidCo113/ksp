@@ -77,10 +77,10 @@ static struct {
         unsigned int depth_rb;
         int w;
         int h;
-        int uni_exposure;
-        int uni_saturation;
-        int uni_contrast;
-        int uni_vignette;
+        int uni_pp_sat;
+        int uni_pp_scale;
+        int uni_pp_bias;
+        int uni_pp_vig;
 } postproc = {0};
 
 static struct {
@@ -394,57 +394,55 @@ void display() {
                                         const char* frag =
                                                 "precision mediump float;\n"
                                                 "varying vec2 v_TexCoord;\n"
-                                                "uniform float exposure;\n"
-                                                "uniform float saturation;\n"
-                                                "uniform float contrast;\n"
-                                                "uniform float vignette;\n"
+                                                // pp_scale = (1+exposure/100)*(1+contrast/100), pp_bias = 0.5*(1-(1+contrast/100))
+                                                // exposure folded into contrast: (e*x-0.5)*ct+0.5 == x*(e*ct)+0.5*(1-ct)
+                                                // all derived math done once on CPU, not per pixel
+                                                "uniform float pp_sat;\n"
+                                                "uniform float pp_scale;\n"
+                                                "uniform float pp_bias;\n"
+                                                "uniform float pp_vig;\n"
                                                 "uniform sampler2D tex;\n"
                                                 "void main(){\n"
                                                 "    vec4 c = texture2D(tex, v_TexCoord);\n"
-                                                "    float e = 1.0 + exposure / 100.0;\n"
-                                                "    c.rgb *= e;\n"
                                                 "    float g = dot(c.rgb, vec3(0.299, 0.587, 0.114));\n"
-                                                "    float s = 1.0 + saturation / 100.0;\n"
-                                                "    c.rgb = mix(vec3(g), c.rgb, s);\n"
-                                                "    float ct = 1.0 + contrast / 100.0;\n"
-                                                "    c.rgb = (c.rgb - 0.5) * ct + 0.5;\n"
-                                                "    float vig = 1.0 - (vignette / 100.0) * dot(v_TexCoord - 0.5, v_TexCoord - 0.5) * 4.0;\n"
-                                                "    c.rgb *= clamp(vig, 0.0, 1.0);\n"
-                                                "    c.rgb = clamp(c.rgb, 0.0, 1.0);\n"
-                                                "    gl_FragColor = c;\n"
+                                                "    c.rgb = mix(vec3(g), c.rgb, pp_sat);\n"
+                                                "    c.rgb = c.rgb * pp_scale + pp_bias;\n"
+                                                "    vec2 d = v_TexCoord - 0.5;\n"
+                                                "    c.rgb *= clamp(1.0 - pp_vig * dot(d, d), 0.0, 1.0);\n"
+                                                "    gl_FragColor = c;\n" // fixed-point target clamps on write — explicit clamp removed
                                                 "}\n";
                                         postproc.shader = glx_shader(vert, frag);
                                 } else {
 #endif
                                 const char* vert = "void main(){gl_TexCoord[0]=gl_MultiTexCoord0;gl_Position=ftransform();}";
+                                // derived factors precomputed CPU-side (see pp_* upload); exposure folded into contrast scale
                                 const char* frag =
-                                        "uniform float exposure;"
-                                        "uniform float saturation;"
-                                        "uniform float contrast;"
-                                        "uniform float vignette;"
+                                        "uniform float pp_sat;"
+                                        "uniform float pp_scale;"
+                                        "uniform float pp_bias;"
+                                        "uniform float pp_vig;"
                                         "uniform sampler2D tex;"
                                         "void main(){"
                                         "vec4 c=texture2D(tex,gl_TexCoord[0].xy);"
-                                        "float e=1.0+exposure/100.0;"
-                                        "c.rgb*=e;"
                                         "float g=dot(c.rgb,vec3(0.299,0.587,0.114));"
-                                        "float s=1.0+saturation/100.0;"
-                                        "c.rgb=mix(vec3(g),c.rgb,s);"
-                                        "float ct=1.0+contrast/100.0;"
-                                        "c.rgb=(c.rgb-0.5)*ct+0.5;"
-                                        "float vig=1.0-(vignette/100.0)*dot(gl_TexCoord[0].xy-0.5,gl_TexCoord[0].xy-0.5)*4.0;"
-                                        "c.rgb*=clamp(vig,0.0,1.0);"
-                                        "c.rgb=clamp(c.rgb,0.0,1.0);"
+                                        "c.rgb=mix(vec3(g),c.rgb,pp_sat);"
+                                        "c.rgb=c.rgb*pp_scale+pp_bias;"
+                                        "vec2 d=gl_TexCoord[0].xy-0.5;"
+                                        "c.rgb*=clamp(1.0-pp_vig*dot(d,d),0.0,1.0);"
                                         "gl_FragColor=c;}";
                                 postproc.shader = glx_shader(vert, frag);
 #if defined(OPENGL_ES)
                                 }
 #endif
                                 if(postproc.shader) {
-                                        postproc.uni_exposure = glGetUniformLocation(postproc.shader, "exposure");
-                                        postproc.uni_saturation = glGetUniformLocation(postproc.shader, "saturation");
-                                        postproc.uni_contrast = glGetUniformLocation(postproc.shader, "contrast");
-                                        postproc.uni_vignette = glGetUniformLocation(postproc.shader, "vignette");
+                                        postproc.uni_pp_sat = glGetUniformLocation(postproc.shader, "pp_sat");
+                                        postproc.uni_pp_scale = glGetUniformLocation(postproc.shader, "pp_scale");
+                                        postproc.uni_pp_bias = glGetUniformLocation(postproc.shader, "pp_bias");
+                                        postproc.uni_pp_vig = glGetUniformLocation(postproc.shader, "pp_vig");
+                                        // sampler binding never changes — set once here, not per frame
+                                        glUseProgram(postproc.shader);
+                                        glUniform1i(glGetUniformLocation(postproc.shader, "tex"), 0);
+                                        glUseProgram(0);
                                 }
                         }
 
@@ -726,15 +724,17 @@ void display() {
                                 }
 
                                 if(postproc.shader) {
+                                        // derive final shader factors on CPU once per frame
+                                        float e = 1.0F + settings.exposure / 100.0F;
+                                        float ct = 1.0F + settings.contrast / 100.0F;
                                         glUseProgram(postproc.shader);
-                                        glUniform1f(postproc.uni_exposure, settings.exposure);
-                                        glUniform1f(postproc.uni_saturation, settings.saturation);
-                                        glUniform1f(postproc.uni_contrast, settings.contrast);
-                                        glUniform1f(postproc.uni_vignette, settings.vignette);
+                                        glUniform1f(postproc.uni_pp_sat, 1.0F + settings.saturation / 100.0F); // pp_sat
+                                        glUniform1f(postproc.uni_pp_scale, e * ct);                            // pp_scale
+                                        glUniform1f(postproc.uni_pp_bias, 0.5F * (1.0F - ct));                  // pp_bias
+                                        glUniform1f(postproc.uni_pp_vig, (settings.vignette / 100.0F) * 4.0F); // pp_vig
 
 #if defined(OPENGL_ES)
                                         if(gles_version >= 2) {
-                                                glUniform1i(glGetUniformLocation(postproc.shader, "tex"), 0);
                                                 glx_draw_screen_quad();
                                         } else {
 #else

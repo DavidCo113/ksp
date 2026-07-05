@@ -29,6 +29,7 @@ struct Particle {
 	unsigned char type;
 	float size;
 	float fade;
+	float ground_y; // cached surface height for rain/snow (types 253/254) — avoids per-frame map_isair rwlock
 	unsigned int color;
 };
 
