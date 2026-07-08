@@ -139,6 +139,9 @@ jobs:
             done
           done
           patchelf --set-rpath '$ORIGIN/lib' client
+          for f in lib/*.so*; do
+            [ -f "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
 
       - name: Zip release (Linux)
         if: matrix.platform == 'linux'
