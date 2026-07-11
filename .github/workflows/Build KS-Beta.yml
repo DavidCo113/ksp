@@ -87,7 +87,12 @@ jobs:
         shell: msys2 {0}
         run: |
           cd build/KyroSpades
-          ldd client.exe | grep ucrt64 | awk '{print $3}' | xargs -I{} cp {} .
+          # The CMake post-build step (bundle_libraries.sh) already copies FFmpeg DLLs
+          # next to client.exe. This is a belt-and-suspenders step that also pulls in
+          # any remaining UCRT64 DLLs the executable depends on.
+          ldd client.exe | grep ucrt64 | awk '{print $3}' | xargs -I{} cp -n {} . 2>/dev/null || true
+          echo "=== Bundled FFmpeg DLLs ==="
+          ls -1 libav*.dll libsw*.dll 2>/dev/null || echo "WARNING: no FFmpeg DLLs found — recording won't work"
 
       - name: Zip release (Windows)
         if: matrix.platform == 'windows'
@@ -101,7 +106,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libglfw3-dev libglew-dev libopenal-dev libenet-dev libdeflate-dev libpulse-dev zip libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev patchelf
+          sudo apt-get install -y cmake build-essential pkg-config libglfw3-dev libglew-dev libopenal-dev libenet-dev libdeflate-dev libpulse-dev zip libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev patchelf
 
       - name: Build (Linux)
         if: matrix.platform == 'linux'
@@ -115,12 +120,14 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           cd build/KyroSpades
-          mkdir -p lib
+          # The CMake post-build step (bundle_libraries.sh) already copied FFmpeg +
+          # audio .so files to lib/ and set the rpath. This step additionally
+          # pulls in transitive deps (libx264, libvpx, etc.) that those libs need.
           set -e
-          for lib in avcodec avformat avutil swresample swscale; do
-            path=$(ldd client | awk -v l="lib$lib" '$1 ~ l {print $3}')
-            [ -n "$path" ] && cp -n "$path" lib/
-          done
+          if [ ! -d lib ] || [ -z "$(ls -A lib 2>/dev/null)" ]; then
+            echo "::error::lib/ directory missing or empty — CMake bundling step failed"
+            exit 1
+          fi
           changed=1
           while [ "$changed" = "1" ]; do
             changed=0
@@ -138,10 +145,15 @@ jobs:
               done
             done
           done
-          patchelf --set-rpath '$ORIGIN/lib' client
-          for f in lib/*.so*; do
-            [ -f "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-          done
+          # Rpath is already set by CMake, but run patchelf as a safety net.
+          if command -v patchelf >/dev/null 2>&1; then
+            patchelf --set-rpath '$ORIGIN/lib' client 2>/dev/null || true
+            for f in lib/*.so*; do
+              [ -f "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+            done
+          fi
+          echo "=== Bundled libs ==="
+          ls -1 lib/ | head -20
 
       - name: Zip release (Linux)
         if: matrix.platform == 'linux'
