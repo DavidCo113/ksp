@@ -167,11 +167,13 @@ static uint32_t water_cell_compute(int x, int z, int wx, int wz) {
                 float wr_ = red(wc) * shimmer;
                 float wg_ = green(wc) * shimmer;
                 float wb_ = blue(wc) * shimmer;
-                /* No fog tint — use seabed color + shimmer only,
-                   with a small water-blue tint for the water look. */
-                float r = wr_ * 0.85F + 30.0F * 0.15F;
-                float g = wg_ * 0.85F + 60.0F * 0.15F;
-                float b = wb_ * 0.85F + 120.0F * 0.15F;
+                float hr = fog_color[0] * 255.0F;
+                float hg = fog_color[1] * 255.0F;
+                float hb = fog_color[2] * 255.0F;
+                float w = 0.20F + 0.70F * 0.25F;
+                float r = wr_ + (hr - wr_) * w;
+                float g = wg_ + (hg - wg_) * w;
+                float b = wb_ + (hb - wb_) * w;
                 return rgba((int)fminf(r, 255.0F), (int)fminf(g, 255.0F), (int)fminf(b, 255.0F), 255);
         }
 
@@ -415,7 +417,19 @@ static void water_render_tile(int tx, int tz, int x0, int x1, int z0, int z1,
                                                         }
                                                 }
                                         }
-                                        if(acount == 0) acount = 1;
+                                        /* Skip tiles that contain no water cells.
+                                           Without this, ar/ag/ab stay 0 and the
+                                           tile would be rendered as a solid black
+                                           block (rgba(0,0,0,255)). Its 4 side
+                                           faces sit at tile boundaries and, thanks
+                                           to GL_POLYGON_OFFSET_FILL, bleed on top
+                                           of adjacent non-water blocks — visible
+                                           as a grid of black lines the size of the
+                                           wave tile. Skipping the tile entirely is
+                                           correct: there is no water to render
+                                           here. */
+                                        if(acount == 0)
+                                                continue;
                                         uint32_t tile_color = rgba(ar / acount, ag / acount, ab / acount, 255);
 
                                         /* Tile coordinate for wave */

@@ -97,6 +97,8 @@ static struct {
         int uni_vol2_sun_dir;
         int uni_vol2_sun_brightness;
         int uni_vol2_strength;
+        int uni_vol2_brightness;
+        int uni_vol2_range;
         int uni_vol2_daylight;
         int uni_vol2_lightdir;
         /* Lens flare */
@@ -672,6 +674,8 @@ void display() {
                                                 "uniform vec3 sunPositionScreen;\n"
                                                 "uniform float sunBrightness;\n"
                                                 "uniform float volumetricLightStrength;\n"
+                                                "uniform float rayBrightness;\n"
+                                                "uniform float rayRange;\n"
                                                 "uniform vec3 dayLight;\n"
                                                 "float noise(vec3 uvd){\n"
                                                 "    return fract(dot(sin(uvd*vec3(13041.19699,27723.29171,61029.77801)),vec3(73137.11101,37312.92319,10108.89991)));\n"
@@ -696,8 +700,8 @@ void display() {
                                                 "        }\n"
                                                 "        float occlusion = result / samples;\n"
                                                 "        float distToSun = length(dir);\n"
-                                                "        float falloff = 1.0 - clamp(distToSun * 0.7, 0.0, 0.85);\n"
-                                                "        vec3 rayColor = dayLight * 1.0;\n"
+                                                "        float falloff = 1.0 - clamp(distToSun * 0.7 / rayRange, 0.0, 0.85);\n"
+                                                "        vec3 rayColor = dayLight * rayBrightness;\n"
                                                 "        color += rayColor * occlusion * falloff * sunBrightness * volumetricLightStrength * 3.0;\n"
                                                 "    }\n"
                                                 "    gl_FragColor = vec4(color, 1.0);\n"
@@ -712,6 +716,8 @@ void display() {
                                         "uniform vec3 sunPositionScreen;"
                                         "uniform float sunBrightness;"
                                         "uniform float volumetricLightStrength;"
+                                        "uniform float rayBrightness;"
+                                        "uniform float rayRange;"
                                         "uniform vec3 dayLight;"
                                         "float noise(vec3 uvd){"
                                         "return fract(dot(sin(uvd*vec3(13041.19699,27723.29171,61029.77801)),vec3(73137.11101,37312.92319,10108.89991)));"
@@ -736,8 +742,8 @@ void display() {
                                         "}"
                                         "float occlusion=result/samples;"
                                         "float distToSun=length(dir);"
-                                        "float falloff=1.0-clamp(distToSun*0.7,0.0,0.85);"
-                                        "vec3 rayColor=dayLight*1.0;"
+                                        "float falloff=1.0-clamp(distToSun*0.7/rayRange,0.0,0.85);"
+                                        "vec3 rayColor=dayLight*rayBrightness;"
                                         "color+=rayColor*occlusion*falloff*sunBrightness*volumetricLightStrength*3.0;"
                                         "}"
                                         "gl_FragColor=vec4(color,1.0);"
@@ -751,6 +757,8 @@ void display() {
                                         postproc.uni_vol2_sun_dir = glGetUniformLocation(postproc.vol2_shader, "sunPositionScreen");
                                         postproc.uni_vol2_sun_brightness = glGetUniformLocation(postproc.vol2_shader, "sunBrightness");
                                         postproc.uni_vol2_strength = glGetUniformLocation(postproc.vol2_shader, "volumetricLightStrength");
+                                        postproc.uni_vol2_brightness = glGetUniformLocation(postproc.vol2_shader, "rayBrightness");
+                                        postproc.uni_vol2_range = glGetUniformLocation(postproc.vol2_shader, "rayRange");
                                         postproc.uni_vol2_daylight = glGetUniformLocation(postproc.vol2_shader, "dayLight");
                                         postproc.uni_vol2_lightdir = -1;
                                         glUseProgram(postproc.vol2_shader);
@@ -1258,6 +1266,8 @@ void display() {
                                                 glUniform3f(postproc.uni_vol2_sun_dir, vol_sun_clip[0], vol_sun_clip[1], vol_sun_clip[2]);
                                                 glUniform1f(postproc.uni_vol2_sun_brightness, vol_sun_brightness);
                                                 glUniform1f(postproc.uni_vol2_strength, settings.volumetric_light_strength);
+                                                glUniform1f(postproc.uni_vol2_brightness, settings.volumetric_light_brightness);
+                                                glUniform1f(postproc.uni_vol2_range, settings.volumetric_light_range);
                                                 glUniform3f(postproc.uni_vol2_daylight, vol_day_light[0], vol_day_light[1], vol_day_light[2]);
 
 #if defined(OPENGL_ES)
@@ -1893,9 +1903,9 @@ int main(int argc, char** argv) {
         settings.contrast = 5.0F;
         settings.vignette = 10.0F;
         settings.volumetric_light = 0;
-        settings.volumetric_light_strength = 0.25F;
-        settings.volumetric_light_brightness = 0.64F;
-        settings.volumetric_light_range = 0.25F;
+        settings.volumetric_light_strength = 0.2F;
+        settings.volumetric_light_brightness = 0.3F;
+        settings.volumetric_light_range = 1.0F;
         settings.chat_mention_r = 255;
         settings.chat_mention_g = 255;
         strcpy(settings.name, "DEV_CLIENT");
