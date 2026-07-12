@@ -85,6 +85,10 @@ extern struct RENDER_OPTIONS {
         int sky_gradient;
         float sky_gradient_intensity;
         int water_waves;
+        float water_wave_intensity;
+        float water_wave_speed;
+        int water_wave_mode;
+        int water_wave_tile_size;
         int show_live_player_count;
         int ads_zoom_animation;
         float rifle_ads_fov;
@@ -103,6 +107,9 @@ extern struct RENDER_OPTIONS {
         float vignette;
         int   volumetric_light;
         float volumetric_light_strength;
+        float volumetric_light_brightness;
+        float volumetric_light_range;
+        int   lens_flare;
         int disable_dynamic_fov;
         int textured_blocks;
         int minimap_zoom;
@@ -156,6 +163,7 @@ struct config_setting {
         char name[32];
         char help[64];
         char category[32];
+        char subcategory[32];   /* optional: groups settings into collapsible dropdowns within a category */
         int defaults[8];
         int defaults_length;
         void (*label_callback)(char* buffer, size_t length, int value, size_t index);

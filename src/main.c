@@ -91,7 +91,20 @@ static struct {
         int uni_vol_strength;
         int uni_vol_daylight;
         int uni_vol_lightdir;
-        int vol_applied;            /* set per-frame when volumetric pass ran */
+        int vol_applied;
+        /* Mode 2: directional volumetric light (rays visible from any angle) */
+        unsigned int vol2_shader;
+        int uni_vol2_sun_dir;
+        int uni_vol2_sun_brightness;
+        int uni_vol2_strength;
+        int uni_vol2_daylight;
+        int uni_vol2_lightdir;
+        /* Lens flare */
+        unsigned int flare_shader;
+        int uni_flare_sun_pos;
+        int uni_flare_sun_brightness;
+        int uni_flare_strength;
+        int uni_flare_include_scene;
 } postproc = {0};
 
 static struct {
@@ -561,7 +574,7 @@ void display() {
                                                 "        float lightFactor = sunBrightness * sampleVolumetricLight(uv, sourcePosition, rawDepth) *\n"
                                                 "                            (0.05*cameraDirectionFactor + 0.95*viewAngleFactor);\n"
                                                 "        vec3 godray_color = boost * getDirectLightScatteringAtGround(v_LightDirection) * dayLight;\n"
-                                                "        color += godray_color * lightFactor * volumetricLightStrength * 5.0;\n"
+                                                "        color += godray_color * lightFactor * volumetricLightStrength * 2.0;\n"
                                                 "    }\n"
                                                 "    gl_FragColor = vec4(color, 1.0);\n"
                                                 "}\n";
@@ -612,7 +625,7 @@ void display() {
                                         "float lightFactor=sunBrightness*sampleVolumetricLight(uv,sourcePosition,rawDepth)*"
                                         "(0.05*cameraDirectionFactor+0.95*viewAngleFactor);"
                                         "vec3 godray_color=boost*getDirectLightScatteringAtGround(v_LightDirection)*dayLight;"
-                                        "color+=godray_color*lightFactor*volumetricLightStrength*5.0;"
+                                        "color+=godray_color*lightFactor*volumetricLightStrength*2.0;"
                                         "}"
                                         "gl_FragColor=vec4(color,1.0);"
                                         "}";
@@ -630,6 +643,230 @@ void display() {
                                         glUseProgram(postproc.vol_shader);
                                         glUniform1i(glGetUniformLocation(postproc.vol_shader, "rendered"), 0);
                                         glUniform1i(glGetUniformLocation(postproc.vol_shader, "depthmap"), 1);
+                                        glUseProgram(0);
+                                }
+                        }
+
+                        /* Compile the mode 2 directional volumetric light shader.
+                           Mode 2 uses the SAME sun screen position as mode 1 and lens flare,
+                           but with a longer march range and stronger intensity, making the
+                           rays visible from any angle — not just when looking at the sun.
+                           The shader marches from each pixel toward the sun's screen UV and
+                           counts how many samples hit sky (depth == 1.0) vs terrain. */
+                        if(settings.volumetric_light && !postproc.vol2_shader) {
+#if defined(OPENGL_ES)
+                                if(gles_version >= 2) {
+                                        const char* v2vert =
+                                                "attribute vec2 a_Position;\n"
+                                                "attribute vec2 a_TexCoord;\n"
+                                                "varying vec2 v_TexCoord;\n"
+                                                "void main(){\n"
+                                                "    v_TexCoord = a_TexCoord;\n"
+                                                "    gl_Position = vec4(a_Position, 0.0, 1.0);\n"
+                                                "}\n";
+                                        const char* v2frag =
+                                                "precision mediump float;\n"
+                                                "varying vec2 v_TexCoord;\n"
+                                                "uniform sampler2D rendered;\n"
+                                                "uniform sampler2D depthmap;\n"
+                                                "uniform vec3 sunPositionScreen;\n"
+                                                "uniform float sunBrightness;\n"
+                                                "uniform float volumetricLightStrength;\n"
+                                                "uniform vec3 dayLight;\n"
+                                                "float noise(vec3 uvd){\n"
+                                                "    return fract(dot(sin(uvd*vec3(13041.19699,27723.29171,61029.77801)),vec3(73137.11101,37312.92319,10108.89991)));\n"
+                                                "}\n"
+                                                "void main(){\n"
+                                                "    vec2 uv = v_TexCoord;\n"
+                                                "    vec3 color = texture2D(rendered, uv).rgb;\n"
+                                                "    if (sunBrightness > 0.0 && volumetricLightStrength > 0.0 && sunPositionScreen.z > 0.0) {\n"
+                                                "        vec2 sunUV = 0.5 * sunPositionScreen.xy / sunPositionScreen.z + 0.5;\n"
+                                                "        float rawDepth = texture2D(depthmap, uv).r;\n"
+                                                "        const float samples = 50.0;\n"
+                                                "        float result = 0.0;\n"
+                                                "        float bias = noise(vec3(uv, rawDepth));\n"
+                                                "        vec2 dir = sunUV - uv;\n"
+                                                "        for (float i = 0.0; i < samples; i++) {\n"
+                                                "            float t = (i + bias) / samples;\n"
+                                                "            vec2 samplepos = uv + dir * t;\n"
+                                                "            if (min(samplepos.x, samplepos.y) > 0.0 && max(samplepos.x, samplepos.y) < 1.0) {\n"
+                                                "                float d = texture2D(depthmap, samplepos).r;\n"
+                                                "                result += (d < 1.0) ? 0.0 : 1.0;\n"
+                                                "            }\n"
+                                                "        }\n"
+                                                "        float occlusion = result / samples;\n"
+                                                "        float distToSun = length(dir);\n"
+                                                "        float falloff = 1.0 - clamp(distToSun * 0.7, 0.0, 0.85);\n"
+                                                "        vec3 rayColor = dayLight * 1.0;\n"
+                                                "        color += rayColor * occlusion * falloff * sunBrightness * volumetricLightStrength * 3.0;\n"
+                                                "    }\n"
+                                                "    gl_FragColor = vec4(color, 1.0);\n"
+                                                "}\n";
+                                        postproc.vol2_shader = glx_shader(v2vert, v2frag);
+                                } else {
+#else
+                                const char* v2vert = "void main(){gl_TexCoord[0]=gl_MultiTexCoord0;gl_Position=ftransform();}";
+                                const char* v2frag =
+                                        "uniform sampler2D rendered;"
+                                        "uniform sampler2D depthmap;"
+                                        "uniform vec3 sunPositionScreen;"
+                                        "uniform float sunBrightness;"
+                                        "uniform float volumetricLightStrength;"
+                                        "uniform vec3 dayLight;"
+                                        "float noise(vec3 uvd){"
+                                        "return fract(dot(sin(uvd*vec3(13041.19699,27723.29171,61029.77801)),vec3(73137.11101,37312.92319,10108.89991)));"
+                                        "}"
+                                        "void main(){"
+                                        "vec2 uv=gl_TexCoord[0].xy;"
+                                        "vec3 color=texture2D(rendered,uv).rgb;"
+                                        "if(sunBrightness>0.0&&volumetricLightStrength>0.0&&sunPositionScreen.z>0.0){"
+                                        "vec2 sunUV=0.5*sunPositionScreen.xy/sunPositionScreen.z+0.5;"
+                                        "float rawDepth=texture2D(depthmap,uv).r;"
+                                        "const float samples=50.0;"
+                                        "float result=0.0;"
+                                        "float bias=noise(vec3(uv,rawDepth));"
+                                        "vec2 dir=sunUV-uv;"
+                                        "for(float i=0.0;i<samples;i++){"
+                                        "float t=(i+bias)/samples;"
+                                        "vec2 samplepos=uv+dir*t;"
+                                        "if(min(samplepos.x,samplepos.y)>0.0&&max(samplepos.x,samplepos.y)<1.0){"
+                                        "float d=texture2D(depthmap,samplepos).r;"
+                                        "result+=(d<1.0)?0.0:1.0;"
+                                        "}"
+                                        "}"
+                                        "float occlusion=result/samples;"
+                                        "float distToSun=length(dir);"
+                                        "float falloff=1.0-clamp(distToSun*0.7,0.0,0.85);"
+                                        "vec3 rayColor=dayLight*1.0;"
+                                        "color+=rayColor*occlusion*falloff*sunBrightness*volumetricLightStrength*3.0;"
+                                        "}"
+                                        "gl_FragColor=vec4(color,1.0);"
+                                        "}";
+                                postproc.vol2_shader = glx_shader(v2vert, v2frag);
+#if defined(OPENGL_ES)
+                                }
+#endif
+#endif
+                                if(postproc.vol2_shader) {
+                                        postproc.uni_vol2_sun_dir = glGetUniformLocation(postproc.vol2_shader, "sunPositionScreen");
+                                        postproc.uni_vol2_sun_brightness = glGetUniformLocation(postproc.vol2_shader, "sunBrightness");
+                                        postproc.uni_vol2_strength = glGetUniformLocation(postproc.vol2_shader, "volumetricLightStrength");
+                                        postproc.uni_vol2_daylight = glGetUniformLocation(postproc.vol2_shader, "dayLight");
+                                        postproc.uni_vol2_lightdir = -1;
+                                        glUseProgram(postproc.vol2_shader);
+                                        glUniform1i(glGetUniformLocation(postproc.vol2_shader, "rendered"), 0);
+                                        glUniform1i(glGetUniformLocation(postproc.vol2_shader, "depthmap"), 1);
+                                        glUseProgram(0);
+                                }
+                        }
+
+                        /* Compile the lens flare shader once. Half-size flare. */
+                        if(settings.lens_flare && !postproc.flare_shader) {
+#if defined(OPENGL_ES)
+                                if(gles_version >= 2) {
+                                        const char* fvert =
+                                                "attribute vec2 a_Position;\n"
+                                                "attribute vec2 a_TexCoord;\n"
+                                                "varying vec2 v_TexCoord;\n"
+                                                "void main(){\n"
+                                                "    v_TexCoord = a_TexCoord;\n"
+                                                "    gl_Position = vec4(a_Position, 0.0, 1.0);\n"
+                                                "}\n";
+                                        const char* ffrag =
+                                                "precision mediump float;\n"
+                                                "varying vec2 v_TexCoord;\n"
+                                                "uniform sampler2D rendered;\n"
+                                                "uniform sampler2D depthmap;\n"
+                                                "uniform vec3 sunPositionScreen;\n"
+                                                "uniform float sunBrightness;\n"
+                                                "uniform float lensFlareStrength;\n"
+                                                "uniform float includeScene;\n"
+                                                "void main(){\n"
+                                                "    vec2 uv = v_TexCoord;\n"
+                                                "    vec3 color = vec3(0.0);\n"
+                                                "    if (includeScene > 0.5) color = texture2D(rendered, uv).rgb;\n"
+                                                "    if (sunBrightness > 0.0 && lensFlareStrength > 0.0 && sunPositionScreen.z > 0.0) {\n"
+                                                "        vec2 sunUV = 0.5 * sunPositionScreen.xy / sunPositionScreen.z + 0.5;\n"
+                                                "        float sunDepth = texture2D(depthmap, sunUV).r;\n"
+                                                "        float occlusion = (sunDepth < 1.0) ? 0.15 : 1.0;\n"
+                                                "        vec2 dir = uv - sunUV;\n"
+                                                "        float dist = length(dir);\n"
+                                                "        vec3 flare = vec3(0.0);\n"
+                                                "        flare += vec3(1.0, 0.95, 0.8) * exp(-dist * 20.0) * 0.75;\n"
+                                                "        vec2 toCenter = vec2(0.5) - sunUV;\n"
+                                                "        float axisLen = length(toCenter);\n"
+                                                "        if (axisLen > 0.001) {\n"
+                                                "            vec2 axis = toCenter / axisLen;\n"
+                                                "            vec2 g1 = sunUV + axis * 0.25;\n"
+                                                "            flare += vec3(0.6, 0.7, 1.0) * exp(-length(uv - g1) * 60.0) * 0.3;\n"
+                                                "            vec2 g2 = sunUV + axis * 0.5;\n"
+                                                "            flare += vec3(0.9, 0.6, 1.0) * exp(-length(uv - g2) * 50.0) * 0.25;\n"
+                                                "            vec2 g3 = sunUV + axis * 0.75;\n"
+                                                "            flare += vec3(1.0, 0.8, 0.5) * exp(-length(uv - g3) * 40.0) * 0.2;\n"
+                                                "            vec2 g4 = sunUV + axis * 1.1;\n"
+                                                "            flare += vec3(0.5, 1.0, 0.8) * exp(-length(uv - g4) * 36.0) * 0.175;\n"
+                                                "            vec2 g5 = sunUV - axis * 0.175;\n"
+                                                "            flare += vec3(0.7, 0.5, 1.0) * exp(-length(uv - g5) * 80.0) * 0.15;\n"
+                                                "        }\n"
+                                                "        color += flare * lensFlareStrength * occlusion * sunBrightness;\n"
+                                                "    }\n"
+                                                "    gl_FragColor = vec4(color, 1.0);\n"
+                                                "}\n";
+                                        postproc.flare_shader = glx_shader(fvert, ffrag);
+                                } else {
+#else
+                                const char* fvert = "void main(){gl_TexCoord[0]=gl_MultiTexCoord0;gl_Position=ftransform();}";
+                                const char* ffrag =
+                                        "uniform sampler2D rendered;"
+                                        "uniform sampler2D depthmap;"
+                                        "uniform vec3 sunPositionScreen;"
+                                        "uniform float sunBrightness;"
+                                        "uniform float lensFlareStrength;"
+                                        "uniform float includeScene;"
+                                        "void main(){"
+                                        "vec2 uv=gl_TexCoord[0].xy;"
+                                        "vec3 color=vec3(0.0);"
+                                        "if(includeScene>0.5)color=texture2D(rendered,uv).rgb;"
+                                        "if(sunBrightness>0.0&&lensFlareStrength>0.0&&sunPositionScreen.z>0.0){"
+                                        "vec2 sunUV=0.5*sunPositionScreen.xy/sunPositionScreen.z+0.5;"
+                                        "float sunDepth=texture2D(depthmap,sunUV).r;"
+                                        "float occlusion=(sunDepth<1.0)?0.15:1.0;"
+                                        "vec2 dir=uv-sunUV;"
+                                        "float dist=length(dir);"
+                                        "vec3 flare=vec3(0.0);"
+                                        "flare+=vec3(1.0,0.95,0.8)*exp(-dist*20.0)*0.75;"
+                                        "vec2 toCenter=vec2(0.5)-sunUV;"
+                                        "float axisLen=length(toCenter);"
+                                        "if(axisLen>0.001){"
+                                        "vec2 axis=toCenter/axisLen;"
+                                        "vec2 g1=sunUV+axis*0.25;"
+                                        "flare+=vec3(0.6,0.7,1.0)*exp(-length(uv-g1)*60.0)*0.3;"
+                                        "vec2 g2=sunUV+axis*0.5;"
+                                        "flare+=vec3(0.9,0.6,1.0)*exp(-length(uv-g2)*50.0)*0.25;"
+                                        "vec2 g3=sunUV+axis*0.75;"
+                                        "flare+=vec3(1.0,0.8,0.5)*exp(-length(uv-g3)*40.0)*0.2;"
+                                        "vec2 g4=sunUV+axis*1.1;"
+                                        "flare+=vec3(0.5,1.0,0.8)*exp(-length(uv-g4)*36.0)*0.175;"
+                                        "vec2 g5=sunUV-axis*0.175;"
+                                        "flare+=vec3(0.7,0.5,1.0)*exp(-length(uv-g5)*80.0)*0.15;"
+                                        "}"
+                                        "color+=flare*lensFlareStrength*occlusion*sunBrightness;"
+                                        "}"
+                                        "gl_FragColor=vec4(color,1.0);"
+                                        "}";
+                                postproc.flare_shader = glx_shader(fvert, ffrag);
+#if defined(OPENGL_ES)
+                                }
+#endif
+#endif
+                                if(postproc.flare_shader) {
+                                        postproc.uni_flare_sun_pos = glGetUniformLocation(postproc.flare_shader, "sunPositionScreen");
+                                        postproc.uni_flare_sun_brightness = glGetUniformLocation(postproc.flare_shader, "sunBrightness");
+                                        postproc.uni_flare_strength = glGetUniformLocation(postproc.flare_shader, "lensFlareStrength");
+                                        postproc.uni_flare_include_scene = glGetUniformLocation(postproc.flare_shader, "includeScene");
+                                        glUseProgram(postproc.flare_shader);
+                                        glUniform1i(glGetUniformLocation(postproc.flare_shader, "rendered"), 0);
+                                        glUniform1i(glGetUniformLocation(postproc.flare_shader, "depthmap"), 1);
                                         glUseProgram(0);
                                 }
                         }
@@ -945,7 +1182,7 @@ void display() {
                                 postproc.vol_applied = 0;
                                 if(settings.volumetric_light && settings.volumetric_light_strength > 0.0F
                                    && !network_map_transfer
-                                   && postproc.vol_shader && postproc.vol_fbo && postproc.vol_tex
+                                   && postproc.vol_fbo && postproc.vol_tex
                                    && postproc.fbo && postproc.depth_tex) {
 
                                         /* Compute sun position in clip space, normalized to length 1.
@@ -971,8 +1208,32 @@ void display() {
                                                 vol_sun_clip[2] /= vol_sun_len;
                                         }
 
-                                        /* Sun brightness: clamp(107.143 * sunDir.Y, 0, 1) — same as Luanti.
-                                           sun_dir[1] is the up component; below horizon = no god-rays. */
+                                        /* Also compute a point at the camera (origin in sun-relative
+                                           space) to derive the screen-space sun DIRECTION for mode 2. */
+                                        vec4 vol_cam_world = { camera_x, camera_y, camera_z, 1.0F };
+                                        vec4 vol_cam_clip;
+                                        glmc_mat4_mulv(vol_mvp, vol_cam_world, vol_cam_clip);
+                                        if(vol_cam_clip[3] != 0.0F) {
+                                                vol_cam_clip[0] /= vol_cam_clip[3];
+                                                vol_cam_clip[1] /= vol_cam_clip[3];
+                                        }
+                                        /* Screen-space direction from camera to sun (UV space) */
+                                        float vol_sun_dir_screen[2] = { 0.0F, 0.0F };
+                                        if(vol_sun_clip[3] != 0.0F) {
+                                                float sun_ndc_x = vol_sun_clip[0] / vol_sun_clip[3];
+                                                float sun_ndc_y = vol_sun_clip[1] / vol_sun_clip[3];
+                                                float cam_ndc_x = vol_cam_clip[0];
+                                                float cam_ndc_y = vol_cam_clip[1];
+                                                float dx = sun_ndc_x - cam_ndc_x;
+                                                float dy = sun_ndc_y - cam_ndc_y;
+                                                float dlen = sqrtf(dx * dx + dy * dy);
+                                                if(dlen > 0.001F) {
+                                                        vol_sun_dir_screen[0] = dx / dlen * 0.5F;
+                                                        vol_sun_dir_screen[1] = dy / dlen * 0.5F;
+                                                }
+                                        }
+
+                                        /* Sun brightness: clamp(107.143 * sunDir.Y, 0, 1) — same as Luanti. */
                                         float vol_sun_brightness = 107.143F * sun_dir[1];
                                         if(vol_sun_brightness < 0.0F) vol_sun_brightness = 0.0F;
                                         if(vol_sun_brightness > 1.0F) vol_sun_brightness = 1.0F;
@@ -989,12 +1250,91 @@ void display() {
                                         glActiveTexture(GL_TEXTURE0);
                                         glBindTexture(GL_TEXTURE_2D, postproc.texture);
 
-                                        glUseProgram(postproc.vol_shader);
-                                        glUniform3f(postproc.uni_vol_sun_pos, vol_sun_clip[0], vol_sun_clip[1], vol_sun_clip[2]);
-                                        glUniform1f(postproc.uni_vol_sun_brightness, vol_sun_brightness);
-                                        glUniform1f(postproc.uni_vol_strength, settings.volumetric_light_strength);
-                                        glUniform3f(postproc.uni_vol_daylight, vol_day_light[0], vol_day_light[1], vol_day_light[2]);
-                                        glUniform3f(postproc.uni_vol_lightdir, sun_dir[0], sun_dir[1], sun_dir[2]);
+                                        /* Use the vol2 shader (the only volumetric light method). */
+                                        unsigned int active_shader = postproc.vol2_shader;
+
+                                        if(active_shader) {
+                                                glUseProgram(active_shader);
+                                                glUniform3f(postproc.uni_vol2_sun_dir, vol_sun_clip[0], vol_sun_clip[1], vol_sun_clip[2]);
+                                                glUniform1f(postproc.uni_vol2_sun_brightness, vol_sun_brightness);
+                                                glUniform1f(postproc.uni_vol2_strength, settings.volumetric_light_strength);
+                                                glUniform3f(postproc.uni_vol2_daylight, vol_day_light[0], vol_day_light[1], vol_day_light[2]);
+
+#if defined(OPENGL_ES)
+                                                if(gles_version >= 2) {
+                                                        glx_draw_screen_quad();
+                                                } else {
+#else
+                                                glBegin(GL_QUADS);
+                                                glTexCoord2f(0.0F, 0.0F); glVertex2f(0.0F, 0.0F);
+                                                glTexCoord2f(1.0F, 0.0F); glVertex2f((float)settings.window_width, 0.0F);
+                                                glTexCoord2f(1.0F, 1.0F); glVertex2f((float)settings.window_width, (float)settings.window_height);
+                                                glTexCoord2f(0.0F, 1.0F); glVertex2f(0.0F, (float)settings.window_height);
+                                                glEnd();
+#endif
+#if defined(OPENGL_ES)
+                                                }
+#endif
+
+                                                glUseProgram(0);
+                                        }
+
+                                        /* Unbind both texture units. */
+                                        glActiveTexture(GL_TEXTURE1);
+                                        glBindTexture(GL_TEXTURE_2D, 0);
+                                        glActiveTexture(GL_TEXTURE0);
+                                        glBindTexture(GL_TEXTURE_2D, 0);
+
+                                        postproc.vol_applied = 1;
+                                }
+
+                                /* === Lens flare pass === */
+                                if(settings.lens_flare
+                                   && postproc.flare_shader && postproc.vol_fbo && postproc.vol_tex
+                                   && postproc.fbo && postproc.depth_tex
+                                   && !network_map_transfer) {
+
+                                        mat4 fl_mv, fl_mvp;
+                                        glmc_mat4_mul(saved_view2, saved_model2, fl_mv);
+                                        glmc_mat4_mul(saved_proj2, fl_mv, fl_mvp);
+                                        vec4 fl_sun_world = {
+                                                camera_x + 10000.0F * sun_dir[0],
+                                                camera_y + 10000.0F * sun_dir[1],
+                                                camera_z + 10000.0F * sun_dir[2],
+                                                1.0F
+                                        };
+                                        vec4 fl_sun_clip;
+                                        glmc_mat4_mulv(fl_mvp, fl_sun_world, fl_sun_clip);
+                                        float fl_sun_len = sqrtf(fl_sun_clip[0] * fl_sun_clip[0]
+                                                                       + fl_sun_clip[1] * fl_sun_clip[1]
+                                                                       + fl_sun_clip[2] * fl_sun_clip[2]);
+                                        if(fl_sun_len > 0.0001F) {
+                                                fl_sun_clip[0] /= fl_sun_len;
+                                                fl_sun_clip[1] /= fl_sun_len;
+                                                fl_sun_clip[2] /= fl_sun_len;
+                                        }
+                                        float fl_sun_brightness = 107.143F * sun_dir[1];
+                                        if(fl_sun_brightness < 0.0F) fl_sun_brightness = 0.0F;
+                                        if(fl_sun_brightness > 1.0F) fl_sun_brightness = 1.0F;
+
+                                        glBindFramebuffer(GL_FRAMEBUFFER, postproc.vol_fbo);
+                                        glActiveTexture(GL_TEXTURE1);
+                                        glBindTexture(GL_TEXTURE_2D, postproc.depth_tex);
+                                        glActiveTexture(GL_TEXTURE0);
+                                        glBindTexture(GL_TEXTURE_2D, postproc.texture);
+
+                                        glUseProgram(postproc.flare_shader);
+                                        glUniform3f(postproc.uni_flare_sun_pos, fl_sun_clip[0], fl_sun_clip[1], fl_sun_clip[2]);
+                                        glUniform1f(postproc.uni_flare_sun_brightness, fl_sun_brightness);
+                                        glUniform1f(postproc.uni_flare_strength, 1.0F);
+
+                                        if(postproc.vol_applied) {
+                                                glUniform1f(postproc.uni_flare_include_scene, 0.0F);
+                                                glEnable(GL_BLEND);
+                                                glBlendFunc(GL_ONE, GL_ONE);
+                                        } else {
+                                                glUniform1f(postproc.uni_flare_include_scene, 1.0F);
+                                        }
 
 #if defined(OPENGL_ES)
                                         if(gles_version >= 2) {
@@ -1012,13 +1352,12 @@ void display() {
                                         }
 #endif
 
+                                        if(postproc.vol_applied) glDisable(GL_BLEND);
                                         glUseProgram(0);
-                                        /* Unbind both texture units. */
                                         glActiveTexture(GL_TEXTURE1);
                                         glBindTexture(GL_TEXTURE_2D, 0);
                                         glActiveTexture(GL_TEXTURE0);
                                         glBindTexture(GL_TEXTURE_2D, 0);
-
                                         postproc.vol_applied = 1;
                                 }
 
@@ -1507,10 +1846,14 @@ int main(int argc, char** argv) {
         settings.shadow_entities = 0;
         settings.ambient_occlusion = 0;
         settings.shadow_quality = 0;
-        settings.shadow_intensity = 0.7F;
+        settings.shadow_intensity = 0.40F;
         settings.sky_gradient = 0;
         settings.sky_gradient_intensity = 0.5F;
         settings.water_waves = 0;
+        settings.water_wave_intensity = 2.0F;
+        settings.water_wave_speed = 1.0F;
+        settings.water_wave_mode = 0;
+        settings.water_wave_tile_size = 2;
         settings.render_distance = 128.0F;
         settings.spectator_fog_distance = 128.0F;
         settings.window_width = 800;
@@ -1550,7 +1893,9 @@ int main(int argc, char** argv) {
         settings.contrast = 5.0F;
         settings.vignette = 10.0F;
         settings.volumetric_light = 0;
-        settings.volumetric_light_strength = 0.2F;
+        settings.volumetric_light_strength = 0.25F;
+        settings.volumetric_light_brightness = 0.64F;
+        settings.volumetric_light_range = 0.25F;
         settings.chat_mention_r = 255;
         settings.chat_mention_g = 255;
         strcpy(settings.name, "DEV_CLIENT");

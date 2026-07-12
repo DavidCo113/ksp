@@ -122,7 +122,7 @@ static unsigned int fx_slot = 0;     /* aux slot world sources feed */
 #define SOUND_OCCL_MUFFLE 0.37F      /* [0..1]  blocked-sound HF muffle depth   */
 #define SOUND_REVERB_WETNESS 0.91F   /* [0..2]  reverb send level               */
 #define SOUND_REVERB_DECAY_MIN 0.10F /* [0.02..2]  shortest reverb tail, sec    */
-#define SOUND_REVERB_DECAY_MAX 25.0F /* [2..40]    longest reverb tail, sec     */
+#define SOUND_REVERB_DECAY_MAX 4.91F /* [2..40]    longest reverb tail, sec     */
 #define SOUND_ROOM_RAYS 4            /* [1..16] room-probe rays per frame       */
 #define SOUND_OCCL_INTERVAL 4        /* [1..16] re-probe occlusion every N frames */
 

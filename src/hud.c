@@ -4733,16 +4733,90 @@ static void hud_settings_render(mu_Context* ctx, float scalex, float scaley) {
                 mu_begin_panel(ctx, "Settings");
 
                 int width = mu_get_current_container(ctx)->body.w;
+
+                /* Two-pass rendering:
+                   Pass 1: render all settings with NO subcategory (directly, no dropdown)
+                   Pass 2: for each unique subcategory, render one collapsible dropdown
+                           containing ALL settings in that subcategory (grouped together
+                           regardless of their order in the config_settings list). */
+
+                /* Helper: check if a setting should be skipped (hidden recording settings) */
+                #define SHOULD_SKIP(a) ( \
+                        strcmp((a)->name, "Recording FPS") == 0 || \
+                        strcmp((a)->name, "Recording bitrate (kbps)") == 0 || \
+                        strcmp((a)->name, "Replay Enabled") == 0 || \
+                        strcmp((a)->name, "Replay Duration (s)") == 0 || \
+                        strcmp((a)->name, "Replay Save Hotkey") == 0)
+
+                /* Pass 1: settings with no subcategory */
                 for(int k = 0; k < list_size(&config_settings); k++) {
                         struct config_setting* a = list_get(&config_settings, k);
-                        if(setting_in_category(a, selected_category)
-                           && strcmp(a->name, "Recording FPS") != 0
-                           && strcmp(a->name, "Recording bitrate (kbps)") != 0
-                           && strcmp(a->name, "Replay Enabled") != 0
-                           && strcmp(a->name, "Replay Duration (s)") != 0
-                           && strcmp(a->name, "Replay Save Hotkey") != 0)
-                                render_setting_row(ctx, a, width);
+                        if(!setting_in_category(a, selected_category) || SHOULD_SKIP(a))
+                                continue;
+                        if(a->subcategory[0] != 0)
+                                continue; /* skip subcategorized settings — handled in pass 2 */
+                        render_setting_row(ctx, a, width);
                 }
+
+                /* Pass 2: for each unique subcategory, render a dropdown */
+                char seen_subcats[32][32]; /* track which subcategories we've already rendered */
+                int num_seen = 0;
+
+                for(int k = 0; k < list_size(&config_settings); k++) {
+                        struct config_setting* a = list_get(&config_settings, k);
+                        if(!setting_in_category(a, selected_category) || SHOULD_SKIP(a))
+                                continue;
+                        if(a->subcategory[0] == 0)
+                                continue; /* already rendered in pass 1 */
+
+                        /* Check if we already rendered this subcategory */
+                        int already_seen = 0;
+                        for(int s = 0; s < num_seen; s++) {
+                                if(strcmp(seen_subcats[s], a->subcategory) == 0) {
+                                        already_seen = 1;
+                                        break;
+                                }
+                        }
+                        if(already_seen)
+                                continue;
+
+                        /* Record this subcategory as seen */
+                        strncpy(seen_subcats[num_seen], a->subcategory, 31);
+                        seen_subcats[num_seen][31] = 0;
+                        num_seen++;
+                        if(num_seen >= 32) break;
+
+                        /* Render the dropdown header (highlighted) */
+                        mu_layout_row(ctx, 1, (int[]) {-1}, 0);
+
+                        /* Highlight the treenode header with accent color */
+                        mu_Color old_border = ctx->style->colors[MU_COLOR_BORDER];
+                        mu_Color old_text = ctx->style->colors[MU_COLOR_TEXT];
+                        mu_Color accent = {settings.ui_accent_r, settings.ui_accent_g, settings.ui_accent_b, 255};
+                        mu_Color white = {255, 255, 255, 255};
+                        ctx->style->colors[MU_COLOR_BORDER] = accent;
+                        ctx->style->colors[MU_COLOR_TEXT] = white;
+
+                        int expanded = mu_begin_treenode(ctx, a->subcategory);
+
+                        ctx->style->colors[MU_COLOR_TEXT] = old_text;
+                        ctx->style->colors[MU_COLOR_BORDER] = old_border;
+
+                        if(expanded) {
+                                /* Render all settings in this subcategory */
+                                for(int j = 0; j < list_size(&config_settings); j++) {
+                                        struct config_setting* b = list_get(&config_settings, j);
+                                        if(!setting_in_category(b, selected_category) || SHOULD_SKIP(b))
+                                                continue;
+                                        if(strcmp(b->subcategory, a->subcategory) != 0)
+                                                continue;
+                                        render_setting_row(ctx, b, width);
+                                }
+                                mu_end_treenode(ctx);
+                        }
+                }
+
+                #undef SHOULD_SKIP
 
                 mu_end_panel(ctx);
 

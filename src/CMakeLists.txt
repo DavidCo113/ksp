@@ -11,13 +11,9 @@ set(CGLM_USE_C99 ON CACHE INTERNAL "")
 set(MIRRORS https://butter.penguins.win/mirror)
 FetchContent_MakeAvailable(cglm)
 
-FetchContent_Declare(
-        vxl
-        GIT_REPOSITORY  https://github.com/xtreme8000/libvxl
-        GIT_TAG                 origin/master
-)
-
-FetchContent_MakeAvailable(vxl)
+# Use vendored libvxl (efficiency update) instead of FetchContent
+add_library(vxl STATIC ${KyroSpades_SOURCE_DIR}/deps/libvxl/libvxl.c)
+target_include_directories(vxl PUBLIC ${KyroSpades_SOURCE_DIR}/deps/libvxl)
 
 # SDL2: prefer a system install (brew, MacPorts, etc.) to avoid a full source
 # build. Fall back to FetchContent only when nothing is found.
@@ -446,6 +442,7 @@ if(NOT ANDROID)
                 TARGET ${KS_TARGET}
                 POST_BUILD
                 COMMENT "Extracting additional third-party assets..."
+                DEPENDS ${KyroSpades_SOURCE_DIR}/bsresources.zip
                 WORKING_DIRECTORY ${KyroSpades_SOURCE_DIR}/build/KyroSpades
                 COMMAND ${CMAKE_COMMAND} -E tar xzf ${KyroSpades_SOURCE_DIR}/bsresources.zip
         )
@@ -456,11 +453,6 @@ if(NOT ANDROID)
                 COMMENT "Copying overrides..."
                 COMMAND ${CMAKE_COMMAND} -E copy_directory ${KyroSpades_SOURCE_DIR}/resources.override ${KyroSpades_SOURCE_DIR}/build/KyroSpades
         )
-
-        # NOTE: Library bundling (FFmpeg/OpenAL .so/.dylib/.dll) is handled by the
-        # CI workflows' "Bundle shared libraries" / "Bundle DLLs" steps, not here.
-        # Local builds use system libraries (user installs FFmpeg dev packages).
-        # The cmake/bundle_libraries.sh script is available for manual portable builds.
 
         install(
                 TARGETS ${KS_TARGET}
