@@ -1,29 +1,29 @@
 /*
-	Copyright (c) 2017-2020 ByteBit
+        Copyright (c) 2017-2020 ByteBit
 
-	This file is part of KyroSpades.
+        This file is part of KyroSpades.
 
-	KyroSpades is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
+        KyroSpades is free software: you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation, either version 3 of the License, or
+        (at your option) any later version.
 
-	KyroSpades is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+        KyroSpades is distributed in the hope that it will be useful,
+        but WITHOUT ANY WARRANTY; without even the implied warranty of
+        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+        GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with KyroSpades.  If not, see <http://www.gnu.org/licenses/>.
+        You should have received a copy of the GNU General Public License
+        along with KyroSpades.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #ifndef TEXTURE_H
 #define TEXTURE_H
 
 struct texture {
-	int width, height;
-	int texture_id;
-	unsigned char* pixels;
+        int width, height;
+        int texture_id;
+        unsigned char* pixels;
 };
 
 extern struct texture texture_splash;
@@ -71,6 +71,10 @@ extern struct texture texture_ui_flags;
 extern struct texture texture_ui_alert;
 extern struct texture texture_ui_joystick;
 extern struct texture texture_ui_knob;
+
+extern struct texture texture_rain1;
+extern struct texture texture_rain2;
+extern struct texture texture_rain3;
 
 #define TEXTURE_FILTER_NEAREST 0
 #define TEXTURE_FILTER_LINEAR 1

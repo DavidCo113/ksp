@@ -2148,6 +2148,17 @@ int main(int argc, char** argv) {
                         if(settings.snow) {
                                 particle_create_snow();
                         }
+
+                        static int rain_sound_active = 0;
+                        if(settings.rain && !rain_sound_active) {
+                                sound_rain_start();
+                                rain_sound_active = 1;
+                        } else if(!settings.rain && rain_sound_active) {
+                                sound_rain_stop();
+                                rain_sound_active = 0;
+                        }
+                        // Advance rain sound fade (Mineclonia-style -0.5/s fade-out when stopping).
+                        sound_rain_update(step);
                         map_collapsing_update(step);
                         catchup_count++;
                 }
